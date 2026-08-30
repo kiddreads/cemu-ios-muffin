@@ -240,6 +240,11 @@ const char* cemu_bridge_status_text(void);
 /// process termination (e.g. a GPU driver panic) - call this at every meaningful
 /// startup milestone from Swift so a crash's location can be narrowed down from the
 /// surviving log alone.
+// Give THIS thread a signal stack, so a stack overflow on it can still be reported.
+// sigaltstack is per-thread on Darwin; without this a thread that overflows dies with
+// no crash block at all. Call it first thing on any thread that runs engine code.
+void cemu_bridge_install_thread_crash_stack(void);
+
 void cemu_bridge_log_checkpoint(const char* message);
 
 /// Current memory position of this process, in bytes. `availableBytes` is the

@@ -423,7 +423,28 @@ class GameManager: ObservableObject {
         cemu_bridge_register_render_surface(surfacePtr, width, height, dpiScale)
 
         let romPath = game.romPath
-        Task.detached(priority: .userInitiated) { [weak self] in
+
+        // A real thread with a real stack, NOT Task.detached.
+        //
+        // Swift's cooperative pool hands out threads with the platform default stack,
+        // which on a secondary iOS thread is 512 KB. Everything below runs the desktop
+        // Cemu engine, whose title-preparation path - archive directory walk, FST parse,
+        // XML metadata - was written on platforms where a thread gets eight megabytes and
+        // recurses accordingly. 512 KB is not enough for a large title, and running out
+        // of stack is the one fault that CANNOT report itself: the kernel needs stack to
+        // deliver the signal, so the process is killed outright with no handler, no
+        // backtrace and no crash block. That is exactly the shape of Brandon's Mario Kart
+        // 8 launch - dead inside title preparation, no crash block, and the memory
+        // sampler showing memory completely flat the whole way, which rules out a
+        // memory kill.
+        //
+        // 16 MB, and Thread rather than Task, because Thread.stackSize is the only API
+        // that lets us say so. Nano Assault Neo is small enough to have fitted in 512 KB,
+        // which is why one title worked and the big ones did not.
+        let bootThread = Thread { [weak self] in
+            // Per-thread, and this thread is the one that needs it most. Without it a
+            // stack overflow here is silent even now that the handler asks for SA_ONSTACK.
+            cemu_bridge_install_thread_crash_stack()
             guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
             let mlcPath = documentsPath.appendingPathComponent("mlc").path
             try? FileManager.default.createDirectory(atPath: mlcPath, withIntermediateDirectories: true)
@@ -443,7 +464,7 @@ class GameManager: ObservableObject {
             let status = EmulationEngine.bootBlocking(path: romPath)
             cemu_bridge_log_checkpoint("launchGame: engine.boot() returned [background]")
 
-            await MainActor.run {
+            Task { @MainActor in
                 guard let self else { return }
                 engine.refreshStatus()
                 self.lastStatusMessage = engine.statusText
@@ -453,6 +474,9 @@ class GameManager: ObservableObject {
                 }
             }
         }
+        bootThread.name = "cemu-boot"
+        bootThread.stackSize = 16 * 1024 * 1024
+        bootThread.start()
 
         return true
     }

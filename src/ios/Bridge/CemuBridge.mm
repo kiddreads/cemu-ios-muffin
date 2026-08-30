@@ -173,13 +173,53 @@ namespace {
     }
 }
 
+// A signal stack, per thread, and the reason the crash log was empty.
+//
+// signal() installs a handler that runs on the stack of the thread that faulted. That
+// works for every fault except the one where the stack itself is what ran out: the
+// kernel tries to push a signal frame onto an exhausted stack, cannot, and kills the
+// process outright. No handler runs, nothing is written, and from the outside it looks
+// like the app vanished for no reason - which is exactly what Brandon's Mario Kart 8
+// log shows, with the memory sampler proving all the while that memory was flat.
+//
+// SA_ONSTACK plus a sigaltstack fixes that: the handler gets its own small stack that
+// is guaranteed to be there. sigaltstack is PER THREAD on Darwin, so the constructor
+// covers only the thread it runs on and every other thread that matters has to ask.
+static void cemu_install_signal_stack_for_this_thread() {
+    // thread_local so each thread owns its own, and never freed - it has to outlive
+    // any fault, and threads that install one live for the process's lifetime anyway.
+    static thread_local char* altStack = nullptr;
+    if (altStack)
+        return;
+    const size_t altSize = (size_t)SIGSTKSZ + (64u * 1024u);
+    altStack = (char*)malloc(altSize);
+    if (!altStack)
+        return;
+    stack_t ss{};
+    ss.ss_sp = altStack;
+    ss.ss_size = altSize;
+    ss.ss_flags = 0;
+    sigaltstack(&ss, nullptr);
+}
+
+extern "C" void cemu_bridge_install_thread_crash_stack(void) {
+    cemu_install_signal_stack_for_this_thread();
+}
+
 extern "C" __attribute__((constructor(101)))
 void cemu_bridge_install_early_crash_handler() {
     cemu_crash_open_log();
     cemu_crash_write("=== Cemu process started (early constructor) ===\n");
+    cemu_install_signal_stack_for_this_thread();
     int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE};
+    // sigaction rather than signal(), for SA_ONSTACK. Without that flag the alt stack
+    // above is allocated and never used, and a stack overflow stays invisible.
+    struct sigaction sa{};
+    sa.sa_handler = cemu_crash_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_ONSTACK;
     for (int s : sigs)
-        signal(s, cemu_crash_signal_handler);
+        sigaction(s, &sa, nullptr);
     // Installed from the same constructor, and for the same reason: an uncaught throw
     // out of one of the ~90 linked engine libraries' static initializers happens
     // before main(), too early for anything installed from Swift to see it.
