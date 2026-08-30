@@ -524,6 +524,17 @@ private:
 	uint32 m_recommendedMaxVRAMUsage;
 	MetalPixelFormatSupport m_pixelFormatSupport;
 
+	// Draws thrown away because this GPU has no mesh shaders. Counted, not merely
+	// skipped: without mesh shaders every geometry-shader and RECTS draw returns
+	// early, and it used to do so in total silence -- a title could render nothing
+	// at all and the log would carry no trace of why. Only ever touched on the
+	// Latte thread, which is the only thread that runs a draw.
+	uint64 m_droppedDrawsGeometryShader = 0;
+	uint64 m_droppedDrawsRects = 0;
+	uint64 m_droppedDrawsLastReported = 0;
+
+	void ReportDroppedDraws();
+
 	// Managers and caches
 	class MetalMemoryManager* m_memoryManager;
 	class MetalOutputShaderCache* m_outputShaderCache;

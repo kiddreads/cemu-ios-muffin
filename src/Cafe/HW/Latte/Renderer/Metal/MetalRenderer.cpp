@@ -210,6 +210,14 @@ MetalRenderer::MetalRenderer()
 
     CheckForPixelFormatSupport(m_pixelFormatSupport);
 
+    // State this up front rather than leaving it to be inferred from missing
+    // geometry later. Mesh shaders need Metal3 (A13/M1 and up); the A12Z does not
+    // have them, and they are the only path this backend has for a geometry shader
+    // or for emulating the RECTS primitive. On a GPU without them those draws are
+    // dropped - see draw_execute - so this line is the difference between "the
+    // renderer is broken" and "this GPU cannot run these draws yet".
+    cemuLog_log(LogType::Force, "Metal: Metal3 {}, mesh shaders {}{}", m_supportsMetal3 ? "yes" : "no", m_supportsMeshShaders ? "yes" : "no", m_supportsMeshShaders ? "" : " - geometry-shader and RECTS draws will be dropped on this GPU");
+
     // Command queue
     m_commandQueue = m_device->newCommandQueue();
 
@@ -1187,6 +1195,19 @@ void MetalRenderer::draw_beginSequence()
 		m_state.m_skipDrawSequence = true;
 }
 
+// Periodic total for the draws dropped above. Deliberately rate-limited by count
+// rather than by time: a title that drops a handful of draws and a title that drops
+// every draw it issues are different problems, and the number is what tells them
+// apart. Cheap enough to sit on the draw path - two increments and a compare.
+void MetalRenderer::ReportDroppedDraws()
+{
+    const uint64 total = m_droppedDrawsGeometryShader + m_droppedDrawsRects;
+    if (total - m_droppedDrawsLastReported < 1000)
+        return;
+    m_droppedDrawsLastReported = total;
+    cemuLog_log(LogType::Force, "Metal: {} draws dropped so far for want of mesh shaders ({} geometry shader, {} RECTS)", total, m_droppedDrawsGeometryShader, m_droppedDrawsRects);
+}
+
 void MetalRenderer::draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 instanceCount, uint32 count, MPTR indexDataMPTR, Latte::LATTE_VGT_DMA_INDEX_TYPE::E_INDEX_TYPE indexType, bool isFirst)
 {
     if (m_state.m_skipDrawSequence)
@@ -1255,7 +1276,28 @@ void MetalRenderer::draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 
 
     bool usesGeometryShader = UseGeometryShader(LatteGPUState.contextNew, geometryShader != nullptr);
     if (usesGeometryShader && !m_supportsMeshShaders)
+    {
+        // This GPU is not Metal3, so it has no mesh shaders, and the mesh pipeline is
+        // the only way this backend can run a geometry shader or emulate a RECTS
+        // primitive. The draw is dropped. Say so -- loudly the first time for each
+        // cause, then periodically with a running total, because the failure this
+        // produces on screen (missing geometry, or nothing at all) looks exactly like
+        // a renderer that is not working, and nothing else in the log distinguishes
+        // the two. RECTS is called out separately from a real geometry shader because
+        // the two need completely different fixes and titles hit RECTS far more often.
+        if (geometryShader)
+        {
+            m_droppedDrawsGeometryShader++;
+            cemuLog_logOnce(LogType::Force, "Metal: dropping draws that need a geometry shader - this GPU has no mesh shaders, which is the only path this backend has for one. Geometry from these draws will be missing.");
+        }
+        else
+        {
+            m_droppedDrawsRects++;
+            cemuLog_logOnce(LogType::Force, "Metal: dropping draws that use the RECTS primitive - emulating it needs mesh shaders, which this GPU does not have. Titles use RECTS for copy and post-processing passes, so expect missing or blank output.");
+        }
+        ReportDroppedDraws();
         return;
+    }
 
     bool fetchVertexManually = (usesGeometryShader || fetchShader->mtlFetchVertexManually);
 
