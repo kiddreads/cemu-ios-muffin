@@ -245,6 +245,15 @@ const char* cemu_bridge_status_text(void);
 // no crash block at all. Call it first thing on any thread that runs engine code.
 void cemu_bridge_install_thread_crash_stack(void);
 
+// One line describing the machine: model identifier, iOS version, RAM, core layout,
+// how much memory iOS will let this app have, and the build. Stable for the process's
+// lifetime, owned by the bridge, safe to hold.
+//
+// This exists so a report from a device nobody here owns is answerable. Every finding
+// on this port so far has depended on knowing the target hardware, and until now the
+// log never recorded it.
+const char* cemu_bridge_device_report(void);
+
 void cemu_bridge_log_checkpoint(const char* message);
 
 /// Current memory position of this process, in bytes. `availableBytes` is the
