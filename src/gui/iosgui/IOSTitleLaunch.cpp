@@ -31,8 +31,17 @@
 #include "Cemu/Logging/CemuLogging.h"
 
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <system_error>
 #include <string>
+
+// Declared rather than included, for the reason given above - CemuBridge.h is a C header
+// for Swift interop and this file deliberately does not pull it in. Checkpoints matter
+// here specifically because they go to CemuCrashLog.txt through a synchronous fd, while
+// cemuLog buffers: when the process is killed outright rather than crashing, the
+// checkpoints are what survive and the log lines are what get lost.
+extern "C" void cemu_bridge_log_checkpoint(const char* message);
 
 // Mirrored 1:1 by CemuBridgeStatus in src/ios/Bridge/CemuBridge.h. Plain ints across
 // the boundary so neither side has to include the other's header.
@@ -92,16 +101,41 @@ int IOSTitleLaunch_PrepareForegroundTitle(const char* pathStr)
 	// failed boot in this same session, which is precisely when they are most likely to.
 	// The adopt step ahead of it is what makes a file dropped into Documents/keys/ count
 	// as such an import, with no app relaunch in between.
+	cemu_bridge_log_checkpoint("prepare: adopting dropped keys");
 	IOSTitleLaunch_AdoptDroppedKeys();
+	cemu_bridge_log_checkpoint("prepare: reloading the key cache");
 	KeyCache_Reload();
+	cemu_bridge_log_checkpoint("prepare: initializing the title list");
 	IOSTitleLaunch_InitializeTitleList();
 
+	// The size goes in the log because it is the one property that separates the title
+	// that works from the ones that do not, and nothing else records it. A device log
+	// that dies in the next step is a great deal more useful when it says how big the
+	// file being opened was.
+	{
+		std::error_code sizeEc;
+		const std::uintmax_t launchFileSize = fs::file_size(launchPath, sizeEc);
+		if (!sizeEc)
+			cemuLog_log(LogType::Force, "iOS: opening {} ({} MB)", _pathToUtf8(launchPath), launchFileSize / (1024ull * 1024ull));
+		else
+			cemuLog_log(LogType::Force, "iOS: opening {} (size unavailable: {})", _pathToUtf8(launchPath), sizeEc.message());
+	}
+
+	// This is the step that has to name itself. On 2026-08-30 a Mario Kart 8 launch left
+	// "title list initialized" as its last line and then died about 1.8 seconds later
+	// with no signal, no crash block and no further output - every one of those seconds
+	// spent inside the constructor below, which opens the archive, finds a key for it and
+	// reads its metadata. Silence for the whole of the only step that failed.
+	cemu_bridge_log_checkpoint("prepare: opening the title file");
 	TitleInfo launchTitle{launchPath};
+	cemu_bridge_log_checkpoint(launchTitle.IsValid() ? "prepare: title file parsed, valid" : "prepare: title file parsed, NOT valid");
 	if (launchTitle.IsValid())
 	{
+		cemu_bridge_log_checkpoint("prepare: adding the title to the list");
 		// The title is not in the list (nothing scans for it), so add it as a temporary
 		// entry, then launch by base title id.
 		CafeTitleList::AddTitleFromPath(launchPath);
+		cemu_bridge_log_checkpoint("prepare: title added, resolving the base title id");
 		TitleId baseTitleId;
 		if (!CafeTitleList::FindBaseTitleId(launchTitle.GetAppTitleId(), baseTitleId))
 		{
@@ -109,7 +143,9 @@ int IOSTitleLaunch_PrepareForegroundTitle(const char* pathStr)
 			return IOS_TITLE_LAUNCH_BASE_NOT_FOUND;
 		}
 		cemuLog_log(LogType::Force, "iOS: launching real title {:016x} from {}", (uint64)baseTitleId, _pathToUtf8(launchPath));
+		cemu_bridge_log_checkpoint("prepare: mounting the title");
 		CafeSystem::PREPARE_STATUS_CODE r = CafeSystem::PrepareForegroundTitle(baseTitleId);
+		cemu_bridge_log_checkpoint("prepare: mount returned");
 		switch (r)
 		{
 		case CafeSystem::PREPARE_STATUS_CODE::SUCCESS:
