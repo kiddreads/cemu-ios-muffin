@@ -328,6 +328,14 @@ namespace LatteDecompiler
     			src->add("};" _CRLF _CRLF);
                 src->add("struct ObjectPayload {" _CRLF);
                 src->add("VertexOut vertexOut[VERTICES_PER_VERTEX_PRIMITIVE];" _CRLF);
+                // The geometry stage's streamout writes are indexed by the primitive being
+                // processed. GLSL hands a geometry shader gl_PrimitiveIDIn for that; Metal
+                // has no such builtin in a mesh shader, and the mesh stage cannot work it
+                // out for itself - it is spawned with a mesh grid of exactly 1, so its own
+                // threadgroup position is always zero. The object stage IS dispatched one
+                // threadgroup per primitive, so it knows the number and this is how it gets
+                // across the boundary.
+                src->add("uint primitiveId;" _CRLF);
                 src->add("};" _CRLF _CRLF);
     		}
     		if (decompilerContext->shaderType == LatteConst::ShaderType::Geometry)
@@ -341,6 +349,13 @@ namespace LatteDecompiler
 
                 src->add("struct GeometryOut {" _CRLF);
                 src->add("float4 position [[position]];" _CRLF);
+                // Same field, same reason, as _emitVSOutputs declares on VertexOut. Without
+                // it the emitter still writes out.pointSize for every emitted vertex (see
+                // GPU7_CF_INST_EMIT_VERTEX in LatteDecompilerEmitMSL.cpp) and Metal rejects
+                // the whole shader with "no member named 'pointSize' in 'GeometryOut'" - one
+                // error per emitted vertex, which is what a device log showed four of.
+                if (decompilerContext->analyzer.outputPointSize)
+                    src->add("float pointSize [[point_size]];" _CRLF);
     			for (sint32 p = 0; p < decompilerContext->parsedGSCopyShader->numParam; p++)
     			{
     				if (decompilerContext->parsedGSCopyShader->paramMapping[p].exportType != 2)
