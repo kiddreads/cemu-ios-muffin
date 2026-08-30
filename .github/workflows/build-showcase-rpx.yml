@@ -18,6 +18,11 @@ jobs:
     container: devkitpro/devkitppc:latest
     strategy:
       fail-fast: false
+      # Serial, not parallel. Three legs starting at once each ran `dkp-pacman -Sy`
+      # against pkg.devkitpro.org and one of them got back HTTP 403 - their server
+      # throttling us, correctly. Three jobs is not worth hammering somebody else's
+      # package mirror for; the whole matrix takes about a minute either way.
+      max-parallel: 1
       matrix:
         demo: [prime, bakery, handson]
     steps:
@@ -32,27 +37,39 @@ jobs:
 
       # POSIX sh, not bash - the devkitPPC container ships no bash and Actions falls
       # back to `sh -e {0}`, which is dash and has no pipefail.
+      # The project directory must NOT be called "build". The wut Makefile decides
+      # whether it is the outer invocation or the recursive inner one by comparing its
+      # own BUILD variable ("build") against $(notdir $(CURDIR)) - so a project at
+      # /tmp/build convinces it that it is ALREADY inside the build directory, it takes
+      # the inner branch, finds no objects, and reports "Nothing to be done for 'all'"
+      # while exiting 0. That is what the first attempt at this workflow did, and the
+      # only reason build-rainbow-rpx.yml never hit it is that it happens to use
+      # /tmp/rainbow.
       - name: Assemble the project
         run: |
           set -eu
-          cp -r /tmp/wut/samples/make/helloworld /tmp/build
-          rm -f /tmp/build/source/*.c /tmp/build/source/*.cpp
-          cp homebrew/showcase/source/muffin_gfx.h /tmp/build/source/
-          cp homebrew/showcase/source/${{ matrix.demo }}.c /tmp/build/source/
-          ls -la /tmp/build/source
+          PROJ=/tmp/rom-${{ matrix.demo }}
+          cp -r /tmp/wut/samples/make/helloworld "$PROJ"
+          rm -f "$PROJ"/source/*.c "$PROJ"/source/*.cpp
+          cp homebrew/showcase/source/muffin_gfx.h "$PROJ"/source/
+          cp homebrew/showcase/source/${{ matrix.demo }}.c "$PROJ"/source/
+          ls -la "$PROJ"/source
 
       - name: Build ${{ matrix.demo }}.rpx
         run: |
           set -eu
-          make -C /tmp/build TARGET=${{ matrix.demo }}
-          test -f /tmp/build/${{ matrix.demo }}.rpx
+          PROJ=/tmp/rom-${{ matrix.demo }}
+          make -C "$PROJ" TARGET=${{ matrix.demo }}
+          # make can report "Nothing to be done" and still exit 0, so the artifact
+          # existing is the only real proof the build happened.
+          test -f "$PROJ"/${{ matrix.demo }}.rpx
 
       # Same check as the rainbow workflow, for the same reason: this repo has shipped
       # a truncated RPX before, and failing here is free.
       - name: Verify the built RPX
         run: |
           set -eu
-          RPX=/tmp/build/${{ matrix.demo }}.rpx
+          RPX=/tmp/rom-${{ matrix.demo }}/${{ matrix.demo }}.rpx
           SIZE=$(stat -c%s "$RPX")
           echo "${{ matrix.demo }}.rpx = $SIZE bytes"
           test "$SIZE" -gt 4096
@@ -63,5 +80,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: showcase-${{ matrix.demo }}
-          path: /tmp/build/${{ matrix.demo }}.rpx
+          path: /tmp/rom-${{ matrix.demo }}/${{ matrix.demo }}.rpx
           retention-days: 30
