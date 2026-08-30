@@ -143,14 +143,34 @@ struct GameBrowserView: View {
     @State private var searchText = ""
     @State private var showingIconPicker = false
     @State private var showingSettings = false
-    @State private var showingROMImporter = false
-    /// Separate from showingROMImporter on purpose. A document picker only lets you
-    /// SELECT a directory when UTType.folder is among its allowed types; with a
-    /// file-only type list, tapping a folder navigates into it and there is no way to
-    /// choose it. A full Wii U dump IS a directory (code/, content/, meta/), so one
-    /// picker cannot serve both without making folder taps ambiguous. Two explicit
-    /// entry points, two pickers.
-    @State private var showingFolderImporter = false
+    /// Which KIND of import the user asked for. A document picker only lets you SELECT
+    /// a directory when UTType.folder is among its allowed types; with a file-only type
+    /// list, tapping a folder navigates into it and there is no way to choose it. A full
+    /// Wii U dump IS a directory (code/, content/, meta/), so one set of allowed types
+    /// cannot serve both without making folder taps ambiguous. Two entry points, two
+    /// type lists - but ONE .fileImporter.
+    ///
+    /// It used to be two Bools driving two .fileImporter modifiers stacked on the same
+    /// view, and that is why importing was broken: SwiftUI keeps only one presentation
+    /// of a given kind per view, so the second modifier wins and the first silently
+    /// never presents. Tapping the entry point that lost did nothing at all - no picker,
+    /// no error, no way to tell from the outside that anything was wrong.
+    enum ImportKind: Identifiable {
+        case file
+        case folder
+        var id: Self { self }
+
+        /// .item, not .data or a list of ROM types. iOS has no built-in UTType for .rpx,
+        /// .wux, .wud or .wua, so any type-filtered list greys out exactly the files the
+        /// button exists to import. .item is the root of the type hierarchy: everything
+        /// matches, nothing is greyed out, and GameManager.importROM does the deciding
+        /// afterwards against its own copy. .data is nearly as permissive but still
+        /// depends on the provider having resolved a byte-stream type at all; .item
+        /// does not.
+        var contentTypes: [UTType] { self == .folder ? [.folder] : [.item] }
+    }
+
+    @State private var importKind: ImportKind?
     @State private var romImportErrorMessage: String?
 
     var filteredGames: [GameMetadata] {
@@ -204,12 +224,12 @@ struct GameBrowserView: View {
 
                             Menu {
                                 Button {
-                                    showingROMImporter = true
+                                    importKind = .file
                                 } label: {
                                     Label("Game file (.wux, .wud, .wua, .iso, .rpx)", systemImage: "doc")
                                 }
                                 Button {
-                                    showingFolderImporter = true
+                                    importKind = .folder
                                 } label: {
                                     Label("Game folder (code / content / meta)", systemImage: "folder")
                                 }
@@ -284,26 +304,18 @@ struct GameBrowserView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView(gameManager: gameManager)
         }
-        // .item, not .data or a list of ROM types. iOS has no built-in UTType for .rpx,
-        // .wux, .wud or .wua, so any type-filtered list greys out exactly the files this
-        // button exists to import - which is the reported "it only opens folders, you
-        // cannot select things". .item is the root of the type hierarchy: everything
-        // matches, nothing is greyed out, and GameManager.importROM does the deciding
-        // afterwards against its own copy. .data is nearly as permissive but still
-        // depends on the provider having resolved a byte-stream type for the file at
-        // all; .item does not.
+        // ONE importer. See ImportKind above for why two of them meant neither worked.
+        // The allowed types are read at presentation time, so setting importKind and
+        // presenting in the same state change gives the picker the right list.
         .fileImporter(
-            isPresented: $showingROMImporter,
-            allowedContentTypes: [.item],
+            isPresented: Binding(
+                get: { importKind != nil },
+                set: { if !$0 { importKind = nil } }
+            ),
+            allowedContentTypes: (importKind ?? .file).contentTypes,
             allowsMultipleSelection: false
         ) { result in
-            handleImport(result)
-        }
-        .fileImporter(
-            isPresented: $showingFolderImporter,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
+            importKind = nil
             handleImport(result)
         }
         .alert("Couldn't import ROM", isPresented: .constant(romImportErrorMessage != nil), presenting: romImportErrorMessage) { _ in
