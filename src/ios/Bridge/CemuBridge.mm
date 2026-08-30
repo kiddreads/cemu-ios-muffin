@@ -352,6 +352,7 @@ void cemu_bridge_start_memory_watchdog(void) {
     #include "config/CemuConfig.h"
     #include "audio/IAudioAPI.h"
     #include "Cafe/HW/Espresso/PPCState.h"
+    #include "Cafe/HW/Espresso/Recompiler/PPCRecompiler.h"
     #include "Common/version.h"
     #include <filesystem>
     #include <set>
@@ -589,6 +590,9 @@ constexpr uint32_t     kCsDebugged  = 0x10000000u; // CS_DEBUGGED
 std::filesystem::path g_jitSentinelPath;
 std::atomic<bool> g_jitSentinelArmed{false};
 
+// Defined below, registered above it - see ios_jit_is_permitted().
+void ios_jit_survived_boot();
+
 // Reads back the build id stamped on the sentinel's first line. Returns an empty string
 // for a sentinel written by a build that predates the stamp, which reads as "not this
 // build" and therefore gets a retry - the desired answer for exactly those builds.
@@ -706,7 +710,7 @@ bool ios_jit_is_permitted(const std::filesystem::path& sentinelPath)
 	}
 
 	// Arm the sentinel for the whole recompiler-enabled boot, not for a single call.
-	// Disarmed by ios_jit_survived_boot() once a title has actually launched.
+	// Disarmed by ios_jit_survived_boot(), on the first return out of generated code.
 	const std::string sentinelNative = sentinelPath.string();
 	const int sentinelFd = open(sentinelNative.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (sentinelFd < 0)
@@ -731,6 +735,10 @@ bool ios_jit_is_permitted(const std::filesystem::path& sentinelPath)
 
 	g_jitSentinelPath = sentinelPath;
 	g_jitSentinelArmed.store(true);
+	// Disarm on the only event that proves the recompiler survived: control returning out
+	// of generated code. Registering it here rather than at title launch is the entire fix -
+	// see ios_jit_survived_boot() below for what the old placement cost.
+	PPCRecompiler_setSurvivedFirstEntryCallback(+[]() { ios_jit_survived_boot(); });
 
 	cemuLog_log(LogType::Force,
 		"JIT check: PASSED - executable pages are available and CS_DEBUGGED is set (cs_flags 0x{:08x}), so the "
@@ -745,8 +753,18 @@ bool ios_jit_is_permitted(const std::filesystem::path& sentinelPath)
 	return true;
 }
 
-// Called once a title has actually launched with the recompiler live. Until this runs,
-// the sentinel on disk says the last JIT boot did not finish.
+// Called once control has returned ALIVE from recompiled code. Until this runs, the
+// sentinel on disk says the last JIT boot did not finish.
+//
+// It used to be called from the two boot paths below, right after LaunchForegroundTitle()
+// returned, and that was worse than useless. Brandon's v1.37 log clears the sentinel at
+// 15:19:53.606 and takes SIGBUS afterwards, because a title launching says nothing about
+// whether the recompiler can run: the first entry into generated code is roughly three
+// seconds later, and on iOS that entry is precisely where a mapping that mprotect promoted
+// but code-signing never honoured kills the process. So the sentinel was always already
+// deleted by the time it was needed, it never caught a single JIT crash, and every relaunch
+// turned the recompiler straight back on - which is exactly why Brandon reported that
+// enabling JIT crashes every time rather than once.
 void ios_jit_survived_boot()
 {
 	if (!g_jitSentinelArmed.exchange(false))
@@ -1431,9 +1449,9 @@ CemuBridgeStatus cemu_bridge_boot_rpx(const char* rpxPath) {
             cemu_bridge_log_checkpoint("boot_rpx: about to call LaunchForegroundTitle");
             CafeSystem::LaunchForegroundTitle();
             cemu_bridge_log_checkpoint("boot_rpx: LaunchForegroundTitle returned");
-            // Reaching here means a recompiler-enabled boot got a title running, so the
-            // sentinel armed by ios_jit_is_permitted() has nothing left to warn about.
-            ios_jit_survived_boot();
+            // The JIT sentinel is deliberately NOT cleared here. A launched title proves
+            // nothing about the recompiler; PPCRecompiler_enter() clears it on the first
+            // return out of generated code instead.
             // After the launch call, not before: the ladder measures time from a title that
             // is actually running, and starting it during prepare would spend its first step
             // on disc mounting rather than on anything the clock affects.
@@ -1481,9 +1499,7 @@ CemuBridgeStatus cemu_bridge_boot_title(const char* path) {
             cemu_bridge_log_checkpoint("boot_title: about to call LaunchForegroundTitle");
             CafeSystem::LaunchForegroundTitle();
             cemu_bridge_log_checkpoint("boot_title: LaunchForegroundTitle returned");
-            // Reaching here means a recompiler-enabled boot got a title running, so the
-            // sentinel armed by ios_jit_is_permitted() has nothing left to warn about.
-            ios_jit_survived_boot();
+            // Same here: not cleared on launch. See ios_jit_survived_boot().
             // Same call, same position, and for the same reason as in cemu_bridge_boot_rpx()
             // above - which until now was the only place it appeared, and which the app never
             // calls. EmulationEngine.bootBlocking() goes to cemu_bridge_boot_title() for

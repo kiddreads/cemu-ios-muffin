@@ -151,6 +151,12 @@ void PPCRecompiler_allocateRange(uint32 startAddress, uint32 size);
 
 void PPCRecompiler_invalidateRange(uint32 startAddr, uint32 endAddr);
 
+// Fires ONCE, the first time control returns alive from generated code. Registered by
+// the iOS bridge to clear its JIT crash sentinel. That moment - not title launch - is the
+// only point that proves the recompiler both ran and survived, which is the whole job the
+// sentinel exists to do. Pass nullptr to unregister.
+void PPCRecompiler_setSurvivedFirstEntryCallback(void (*callback)());
+
 extern void ATTR_MS_ABI (*PPCRecompiler_enterRecompilerCode)(uint64 codeMem, uint64 ppcInterpreterInstance);
 extern void ATTR_MS_ABI (*PPCRecompiler_leaveRecompilerCode_visited)();
 extern void ATTR_MS_ABI (*PPCRecompiler_leaveRecompilerCode_unvisited)();
