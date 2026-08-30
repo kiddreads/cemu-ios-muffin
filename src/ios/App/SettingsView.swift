@@ -21,6 +21,7 @@ struct SettingsView: View {
     /// not in this sheet's hierarchy, and AppStorage is what makes the setting outlive
     /// the sheet anyway.
     @AppStorage(LaunchLogSettings.showKey) private var showLaunchLog = true
+    @AppStorage("muffin.showLaunchIntro") private var launchIntroEnabled = true
     /// Read by DisplayRouter through `RenderScale.current` at surface-registration time,
     /// not observed by it - hence AppStorage here and a plain UserDefaults read there.
     @AppStorage(RenderScale.storageKey) private var renderScaleRaw = RenderScale.balanced.rawValue
@@ -249,7 +250,16 @@ struct SettingsView: View {
                     // Collection is always on regardless (see IOSLiveLog.h) - gating
                     // that too would mean the toggle could only ever show the boot AFTER
                     // the one that failed.
+                    // The intro is deliberately in the same section as the launch log
+                    // and directly above it, because they occupy the same screen at the
+                    // same moment and turning the log on hides the intro. Putting them
+                    // apart would make that look like a bug.
                     Section {
+                        Toggle(isOn: $launchIntroEnabled) {
+                            Label("Play the launch intro", systemImage: "sparkles")
+                        }
+                        .tint(MuffinTheme.pixelBlue)
+
                         Toggle(isOn: $showLaunchLog) {
                             Label("Show launch log", systemImage: "text.alignleft")
                         }
@@ -257,7 +267,7 @@ struct SettingsView: View {
                     } header: {
                         Text("Diagnostics")
                     } footer: {
-                        Text("Shows what the emulator is doing, with timestamps, while a game boots. Useful when a game starts but the screen stays black.")
+                        Text("The intro plays over the boot rather than before it, so it costs no extra waiting. The launch log takes priority when both are on: shows what the emulator is doing, with timestamps, while a game boots, which is what you want when a game starts but the screen stays black.")
                     }
                     .foregroundColor(MuffinTheme.brownDarkest)
 
