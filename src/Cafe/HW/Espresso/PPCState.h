@@ -271,11 +271,20 @@ struct PPCGuestLiveness
 	uint64 timeslices;      // completed thread timeslices
 	uint64 coreIdleSpins;   // idle-loop iterations, i.e. a core looking for work and finding none
 	uint32 coreInstructionPointer[3]; // 0 when that core is not currently running a guest thread
+	// Raw counter ticks spent inside the interpreter loop, and instructions executed
+	// there, summed over all cores. Unlike cyclesRetired these are measured AT the loop,
+	// so instructions/tsc is real interpreter throughput and tsc/wallclock is the
+	// fraction of the run that any interpreter optimisation could possibly affect.
+	uint64 interpreterTsc;
+	uint64 interpreterInstructions;
 };
 
 void PPCCore_getLiveness(PPCGuestLiveness& out);
 void PPCCore_noteRetiredCycles(uint64 cycles);
 void PPCCore_noteCoreIdleSpin();
+// Called once per interpreter burst - a whole timeslice's worth of instructions - not
+// once per instruction, so it cannot distort what it measures.
+void PPCCore_noteInterpreterBurst(uint64 tscElapsed, uint64 instructions);
 // Called with the interpreter instance a core is running, and with nullptr when it stops
 // running one. The core index is passed explicitly rather than derived from thread-local
 // state on purpose: guest threads are fibers and migrate between host threads, so a
