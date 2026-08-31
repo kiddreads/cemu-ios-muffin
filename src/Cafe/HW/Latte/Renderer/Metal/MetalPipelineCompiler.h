@@ -8,6 +8,12 @@
 struct PipelineObject
 {
     MTL::RenderPipelineState* m_pipeline = nullptr;
+
+    // Geometry shader emulation only. m_pipeline is the passthrough-vertex + fragment
+    // pipeline that draws the result; these two run the vertex and geometry stages into
+    // buffers first, with rasterization disabled.
+    MTL::RenderPipelineState* m_gsEmulationVertexPipeline = nullptr;
+    MTL::RenderPipelineState* m_gsEmulationGeometryPipeline = nullptr;
 };
 
 class MetalPipelineCompiler
@@ -35,4 +41,10 @@ private:
     void InitFromStateRender(const LatteFetchShader* fetchShader, const LatteDecompilerShader* vertexShader, const class MetalAttachmentsInfo& lastUsedAttachmentsInfo, const class MetalAttachmentsInfo& activeAttachmentsInfo, const LatteContextRegister& lcr);
 
     void InitFromStateMesh(const LatteFetchShader* fetchShader, const class MetalAttachmentsInfo& lastUsedAttachmentsInfo, const class MetalAttachmentsInfo& activeAttachmentsInfo, const LatteContextRegister& lcr);
+
+    void InitFromStateGeometryShaderEmulation(const class MetalAttachmentsInfo& lastUsedAttachmentsInfo, const class MetalAttachmentsInfo& activeAttachmentsInfo, const LatteContextRegister& lcr);
+
+    bool CompileGeometryShaderEmulation(NS::Error*& error);
+
+    MTL::RenderPipelineState* CreateVoidVertexPipelineState(MTL::Function* vertexFunction, const char* label);
 };

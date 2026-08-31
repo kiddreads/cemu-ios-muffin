@@ -3,7 +3,6 @@
 #include "Cafe/HW/Latte/Renderer/Metal/MetalRenderer.h"
 #include "Cafe/HW/Latte/Renderer/Metal/LatteToMtl.h"
 #include "Metal/MTLTexture.hpp"
-#include "Cemu/Logging/CemuLogging.h"
 
 uint32 LatteTextureMtl_AdjustTextureCompSel(Latte::E_GX2SURFFMT format, uint32 compSel)
 {
@@ -63,19 +62,16 @@ LatteTextureViewMtl::LatteTextureViewMtl(MetalRenderer* mtlRenderer, LatteTextur
 
 LatteTextureViewMtl::~LatteTextureViewMtl()
 {
-    // Every view here can legitimately be null - see CreateSwizzledView
-    if (m_rgbaView)
-        m_rgbaView->release();
+    m_rgbaView->release();
 	for (sint32 i = 0; i < std::size(m_viewCache); i++)
     {
-        if (m_viewCache[i].key != INVALID_SWIZZLE && m_viewCache[i].texture)
+        if (m_viewCache[i].key != INVALID_SWIZZLE)
             m_viewCache[i].texture->release();
     }
 
     for (auto& [key, texture] : m_fallbackViewCache)
     {
-        if (texture)
-            texture->release();
+        texture->release();
     }
 }
 
@@ -187,15 +183,6 @@ MTL::Texture* LatteTextureViewMtl::CreateSwizzledView(uint32 gpuSamplerSwizzle)
     // Clamp mip levels
     levelCount = std::min(levelCount, m_baseTexture->maxPossibleMipLevels - baseLevel);
     levelCount = std::max(levelCount, (uint32)1);
-
-    // The base texture's allocation is allowed to fail now - on a 6 GB device with BC
-    // decompressed to RGBA8 it regularly does - and a view is built immediately after the
-    // texture, so without this the very next thing that happens is a null dereference.
-    if (!m_baseTexture->GetTexture())
-    {
-        cemuLog_logOnce(LogType::Force, "Metal: no view for a texture that failed to allocate - draws using it will be dropped");
-        return nullptr;
-    }
 
     auto pixelFormat = GetMtlPixelFormat(format, m_baseTexture->isDepth);
     MTL::Texture* texture = m_baseTexture->GetTexture()->newTextureView(pixelFormat, textureType, NS::Range::Make(baseLevel, levelCount), NS::Range::Make(baseLayer, layerCount), swizzle);

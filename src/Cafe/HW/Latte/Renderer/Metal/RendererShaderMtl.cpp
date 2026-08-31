@@ -364,6 +364,9 @@ void RendererShaderMtl::CompileInternal()
     }
 
     m_function = library->newFunction(ToNSString("main0"));
+    // Absent from every shader that is not an emulated geometry stage, and newFunction
+    // answers a name it does not have with null rather than an error.
+    m_gsPassthroughFunction = library->newFunction(ToNSString("gsPassthroughVertex"));
     library->release();
 
 	// Count shader compilation

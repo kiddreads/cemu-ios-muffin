@@ -36,6 +36,15 @@ public:
 	    return m_function;
 	}
 
+	// The passthrough vertex function the geometry shader emulation needs, compiled into
+	// the same library as the emulated geometry stage because it is generated from the
+	// same struct definitions and has to agree with them field for field. Null on every
+	// other shader, and on every device that has mesh shaders.
+	MTL::Function* GetGsPassthroughFunction() const
+	{
+	    return m_gsPassthroughFunction;
+	}
+
 	void PreponeCompilation(bool isRenderThread) override;
 	bool IsCompiled() override;
 	bool WaitForCompiled() override;
@@ -44,6 +53,7 @@ private:
     class MetalRenderer* m_mtlr;
 
 	MTL::Function* m_function = nullptr;
+	MTL::Function* m_gsPassthroughFunction = nullptr;
 
 	StateSemaphore<COMPILATION_STATE> m_compilationState{ COMPILATION_STATE::NONE };
 

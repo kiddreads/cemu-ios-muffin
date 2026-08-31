@@ -43,8 +43,23 @@ enum MetalShaderType
     METAL_SHADER_TYPE_TOTAL
 };
 
+// Set once, at renderer init: true when this GPU has no mesh shaders, so geometry shaders
+// are emulated with rasterization-disabled vertex passes instead of being dropped. Read by
+// the MSL emitter as well as the renderer, since the two have to agree on which shape of
+// shader is being generated.
+extern bool g_mtlEmulateGeometryShader;
+
 inline MetalShaderType GetMtlShaderType(LatteConst::ShaderType shaderType, bool usesGeometryShader)
 {
+    // Under emulation both stages really are vertex functions and bind to the one vertex
+    // argument table, so they have to be tracked as such. They share it: the decompiler
+    // assigns binding points from zero per stage, so a vertex shader and a geometry shader
+    // routinely both want binding 3 for different buffers. That is safe here only because
+    // each stage is a separate draw and its resources are bound immediately before it -
+    // tracking them in separate rows would let the cache skip a rebind that has to happen.
+    if (g_mtlEmulateGeometryShader && usesGeometryShader && (shaderType == LatteConst::ShaderType::Vertex || shaderType == LatteConst::ShaderType::Geometry))
+        return METAL_SHADER_TYPE_VERTEX;
+
     switch (shaderType)
     {
     case LatteConst::ShaderType::Vertex:
