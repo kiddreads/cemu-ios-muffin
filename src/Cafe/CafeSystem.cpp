@@ -229,17 +229,7 @@ void InfoLog_TitleLoaded()
 	cemuLog_log(LogType::Force, "Save path:   {}{}", _pathToUtf8(effectiveSavePath), saveDirExists ? "" : " (not present)");
 
 	// log shader cache name
-	//
-	// Renderer-dependent, because the filename was previously a constant that named a
-	// file the Metal backend never opens. On Metal the caches are {id}_mtlshaders.bin and
-	// {id}_mtlpipeline.bin; the unsuffixed name belongs to the OpenGL path. Anybody
-	// reading a device log to work out why a cache was not being reused was being pointed
-	// at a file that does not exist, which is a worse failure than saying nothing.
-	// Suffix rather than renderer lookup: this runs at title load, where the renderer may
-	// not exist yet, and CafeSystem has no business depending on which backend is active
-	// just to print a path. Naming the directory and the suffix pattern is accurate for
-	// every backend and needs nothing.
-	cemuLog_log(LogType::Force, "Shader cache: shaderCache/transferable/{:016x}_*.bin (Metal writes _mtlshaders and _mtlpipeline)", titleId);
+	cemuLog_log(LogType::Force, "Shader cache file: shaderCache/transferable/{:016x}.bin", titleId);
 	// game profile info
 	std::string gameProfilePath;
 	if(g_current_game_profile->IsDefaultProfile())

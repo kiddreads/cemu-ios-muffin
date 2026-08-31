@@ -5,7 +5,6 @@
 #include "Cafe/CafeSystem.h"
 #include "Cemu/Logging/CemuLogging.h"
 #include "config/ActiveSettings.h"
-#include "Cafe/HW/Espresso/PPCState.h"
 #include "config/LaunchSettings.h"
 #include "Cafe/Account/Account.h"
 #include "util/helpers/helpers.h"
@@ -88,12 +87,6 @@ uint8 ActiveSettings::GetTimerShiftFactor()
 void ActiveSettings::SetTimerShiftFactor(uint8 shiftFactor)
 {
 	s_timer_shift = shiftFactor;
-	// The guest timebase caches this in its anchor so that reading the clock does not
-	// have to consult a setting on every guest mftb. Republishing carries the current
-	// tick forward into the new anchor, so a speed change is continuous - without this
-	// the clock would jump the moment the factor changed, and a clock that jumps
-	// backwards is far worse for a title than one that runs at the wrong rate.
-	PPCTimer_onTimerShiftFactorChanged();
 }
 
 PrecompiledShaderOption ActiveSettings::GetPrecompiledShadersOption()

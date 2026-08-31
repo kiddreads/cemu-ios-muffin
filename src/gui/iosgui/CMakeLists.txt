@@ -4,7 +4,6 @@ if(PLATFORM_IOS)
     target_sources(iosgui PRIVATE
         IOSWindowSystem.cpp
         IOSTitleLaunch.cpp
-	IOSTitleConvert.cpp
     )
 
     # Without this, IOSWindowSystem.cpp never sees precompiled.h's aarch64 wrappers

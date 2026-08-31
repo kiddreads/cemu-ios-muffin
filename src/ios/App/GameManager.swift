@@ -6,7 +6,7 @@ import UIKit
 
 struct GameMetadata: Codable, Identifiable {
     let id: String
-    var title: String
+    let title: String
     let romPath: String
     let coverPath: String?
     let region: String
@@ -14,19 +14,15 @@ struct GameMetadata: Codable, Identifiable {
     let genre: String
     var isFavorite: Bool = false
 
-    // No CodingKeys enum. There used to be one, and it listed every field EXCEPT
-    // isFavorite - so the one piece of per-game state the app actually had was the one
-    // piece that could never be written down. Favourites were lost on every restart
-    // because of those three lines. The synthesised conformance covers everything.
+    enum CodingKeys: String, CodingKey {
+        case id, title, romPath, coverPath, region, releaseDate, genre
+    }
 }
 
 @MainActor
 class GameManager: ObservableObject {
     @Published var games: [GameMetadata] = []
-    /// Derived, not maintained. It used to be a second stored array that toggleFavorite
-    /// appended to without checking, so toggling a game off and on twice could list it
-    /// twice. One source of truth removes that as a possibility rather than fixing it.
-    var favorites: [GameMetadata] { games.filter(\.isFavorite) }
+    @Published var favorites: [GameMetadata] = []
     @Published var isLoading = false
     @Published var currentGame: GameMetadata?
     @Published var emulationState: EmulationState = .idle
@@ -41,10 +37,7 @@ class GameManager: ObservableObject {
     private var frameRateTimer: Timer?
 
     private let romsDirectory = "Roms"
-    /// Per-game state that the filesystem cannot carry - favourites, and the real title
-    /// name once something has looked inside the file. Replaces a `gameListFile =
-    /// "games.json"` constant that was declared and never referenced anywhere.
-    private let libraryStore = GameLibraryStore()
+    private let gameListFile = "games.json"
     private var emulationEngine: EmulationEngine?
     private var surfaceRegistered = false
 
@@ -120,22 +113,8 @@ class GameManager: ObservableObject {
                 discoveredGames.append(gameMetadata)
             }
 
-            // Merge in what the filesystem cannot tell us. The scan decides what EXISTS;
-            // the store only decorates it, so a corrupt or missing store costs a
-            // favourite and never a game.
-            libraryStore.load()
-            for index in discoveredGames.indices {
-                guard let annotation = libraryStore.annotation(for: discoveredGames[index].id) else { continue }
-                discoveredGames[index].isFavorite = annotation.isFavorite
-                if let name = annotation.titleName, !name.isEmpty {
-                    discoveredGames[index].title = name
-                }
-            }
-            // Anything whose file is gone loses its annotation, so a favourite cannot
-            // reattach itself to a different game imported under the same name later.
-            libraryStore.prune(toKeep: Set(discoveredGames.map(\.id)))
-
             self.games = discoveredGames.sorted { $0.title < $1.title }
+            self.favorites = self.games.filter { $0.isFavorite }
         } catch {
             print("Error scanning Roms directory: \(error)")
         }
@@ -364,12 +343,15 @@ class GameManager: ObservableObject {
     }
 
     func toggleFavorite(_ game: GameMetadata) {
-        guard let index = games.firstIndex(where: { $0.id == game.id }) else { return }
-        games[index].isFavorite.toggle()
+        if let index = games.firstIndex(where: { $0.id == game.id }) {
+            games[index].isFavorite.toggle()
 
-        var annotation = libraryStore.annotation(for: game.id) ?? GameAnnotation(id: game.id)
-        annotation.isFavorite = games[index].isFavorite
-        libraryStore.update(annotation)
+            if games[index].isFavorite {
+                favorites.append(games[index])
+            } else {
+                favorites.removeAll { $0.id == game.id }
+            }
+        }
     }
 
     func launchGame(_ game: GameMetadata) {
@@ -441,28 +423,7 @@ class GameManager: ObservableObject {
         cemu_bridge_register_render_surface(surfacePtr, width, height, dpiScale)
 
         let romPath = game.romPath
-
-        // A real thread with a real stack, NOT Task.detached.
-        //
-        // Swift's cooperative pool hands out threads with the platform default stack,
-        // which on a secondary iOS thread is 512 KB. Everything below runs the desktop
-        // Cemu engine, whose title-preparation path - archive directory walk, FST parse,
-        // XML metadata - was written on platforms where a thread gets eight megabytes and
-        // recurses accordingly. 512 KB is not enough for a large title, and running out
-        // of stack is the one fault that CANNOT report itself: the kernel needs stack to
-        // deliver the signal, so the process is killed outright with no handler, no
-        // backtrace and no crash block. That is exactly the shape of Brandon's Mario Kart
-        // 8 launch - dead inside title preparation, no crash block, and the memory
-        // sampler showing memory completely flat the whole way, which rules out a
-        // memory kill.
-        //
-        // 16 MB, and Thread rather than Task, because Thread.stackSize is the only API
-        // that lets us say so. Nano Assault Neo is small enough to have fitted in 512 KB,
-        // which is why one title worked and the big ones did not.
-        let bootThread = Thread { [weak self] in
-            // Per-thread, and this thread is the one that needs it most. Without it a
-            // stack overflow here is silent even now that the handler asks for SA_ONSTACK.
-            cemu_bridge_install_thread_crash_stack()
+        Task.detached(priority: .userInitiated) { [weak self] in
             guard let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
             let mlcPath = documentsPath.appendingPathComponent("mlc").path
             try? FileManager.default.createDirectory(atPath: mlcPath, withIntermediateDirectories: true)
@@ -478,18 +439,11 @@ class GameManager: ObservableObject {
             // default that was chosen with the CPU mode in hand.
             TimebaseScale.applyStoredChoiceIfAny()
 
-            // The engine reads this once, when the title opens its pipeline cache, and
-            // cannot see UserDefaults. Applied here rather than only from the Settings
-            // toggle so the choice survives a relaunch - a switch that silently reverts
-            // every time the app restarts is worse than no switch.
-            cemu_bridge_set_pipeline_cache_enabled(
-                UserDefaults.standard.object(forKey: "muffin.pipelineCacheEnabled") as? Bool ?? true)
-
             cemu_bridge_log_checkpoint("launchGame: about to call engine.boot() [background]")
             let status = EmulationEngine.bootBlocking(path: romPath)
             cemu_bridge_log_checkpoint("launchGame: engine.boot() returned [background]")
 
-            Task { @MainActor in
+            await MainActor.run {
                 guard let self else { return }
                 engine.refreshStatus()
                 self.lastStatusMessage = engine.statusText
@@ -499,9 +453,6 @@ class GameManager: ObservableObject {
                 }
             }
         }
-        bootThread.name = "cemu-boot"
-        bootThread.stackSize = 16 * 1024 * 1024
-        bootThread.start()
 
         return true
     }

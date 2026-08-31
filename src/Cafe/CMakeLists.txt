@@ -488,8 +488,6 @@ add_library(CemuCafe
   TitleList/TitleInfo.h
   TitleList/TitleList.cpp
   TitleList/TitleList.h
-  TitleList/WuaWriter.cpp
-  TitleList/WuaWriter.h
 )
 
 # OpenGL stays desktop-only: iOS has no GL context to give it and ENABLE_OPENGL is
@@ -614,8 +612,6 @@ if(ENABLE_METAL)
         HW/Latte/Renderer/Metal/MetalLayer.h
         HW/Latte/Renderer/Metal/MetalLayer.mm
         HW/Latte/Renderer/Metal/MetalLayerHandle.cpp
-        HW/Latte/Renderer/Metal/MetalBinaryArchive.cpp
-        HW/Latte/Renderer/Metal/MetalBinaryArchive.h
         HW/Latte/Renderer/Metal/MetalLayerHandle.h
         HW/Latte/Renderer/Metal/MetalMemoryManager.cpp
         HW/Latte/Renderer/Metal/MetalMemoryManager.h

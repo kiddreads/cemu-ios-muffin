@@ -11,7 +11,6 @@
 //
 #import "CemuBridge.h"
 #import <Foundation/Foundation.h>
-#include <sys/sysctl.h>
 #include "Cemu/Logging/IOSLiveLog.h"
 
 #include <string>
@@ -174,53 +173,13 @@ namespace {
     }
 }
 
-// A signal stack, per thread, and the reason the crash log was empty.
-//
-// signal() installs a handler that runs on the stack of the thread that faulted. That
-// works for every fault except the one where the stack itself is what ran out: the
-// kernel tries to push a signal frame onto an exhausted stack, cannot, and kills the
-// process outright. No handler runs, nothing is written, and from the outside it looks
-// like the app vanished for no reason - which is exactly what Brandon's Mario Kart 8
-// log shows, with the memory sampler proving all the while that memory was flat.
-//
-// SA_ONSTACK plus a sigaltstack fixes that: the handler gets its own small stack that
-// is guaranteed to be there. sigaltstack is PER THREAD on Darwin, so the constructor
-// covers only the thread it runs on and every other thread that matters has to ask.
-static void cemu_install_signal_stack_for_this_thread() {
-    // thread_local so each thread owns its own, and never freed - it has to outlive
-    // any fault, and threads that install one live for the process's lifetime anyway.
-    static thread_local char* altStack = nullptr;
-    if (altStack)
-        return;
-    const size_t altSize = (size_t)SIGSTKSZ + (64u * 1024u);
-    altStack = (char*)malloc(altSize);
-    if (!altStack)
-        return;
-    stack_t ss{};
-    ss.ss_sp = altStack;
-    ss.ss_size = altSize;
-    ss.ss_flags = 0;
-    sigaltstack(&ss, nullptr);
-}
-
-extern "C" void cemu_bridge_install_thread_crash_stack(void) {
-    cemu_install_signal_stack_for_this_thread();
-}
-
 extern "C" __attribute__((constructor(101)))
 void cemu_bridge_install_early_crash_handler() {
     cemu_crash_open_log();
     cemu_crash_write("=== Cemu process started (early constructor) ===\n");
-    cemu_install_signal_stack_for_this_thread();
     int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE};
-    // sigaction rather than signal(), for SA_ONSTACK. Without that flag the alt stack
-    // above is allocated and never used, and a stack overflow stays invisible.
-    struct sigaction sa{};
-    sa.sa_handler = cemu_crash_signal_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_ONSTACK;
     for (int s : sigs)
-        sigaction(s, &sa, nullptr);
+        signal(s, cemu_crash_signal_handler);
     // Installed from the same constructor, and for the same reason: an uncaught throw
     // out of one of the ~90 linked engine libraries' static initializers happens
     // before main(), too early for anything installed from Swift to see it.
@@ -288,86 +247,6 @@ namespace {
                  (unsigned long long)(footprintBytes / (1024ull * 1024ull)));
         cemu_bridge_log_checkpoint(line);
     }
-}
-
-// A description of the machine this is running on, written once at startup and
-// available to the UI on demand.
-//
-// WHY: until now the log recorded RAM and the iOS version and never once said WHICH
-// DEVICE it ran on. Every diagnosis on this port so far has quietly depended on
-// knowing the target is an A12Z iPad Pro - that is how "no BC texture formats" and
-// "no mesh shaders" were reached at all. A log from anybody else's device would have
-// been unactionable, because the first question about any of those findings is "what
-// hardware?" and nothing in the file could answer it.
-//
-// The raw model identifier (iPad8,11 and so on) rather than a marketing name: there is
-// no way to map identifiers to names without shipping a table that is out of date the
-// moment a new device exists, and a wrong name is worse than an identifier anyone can
-// look up.
-static std::string g_deviceReport;
-
-static std::string cemu_sysctl_string(const char* name)
-{
-    size_t len = 0;
-    if (sysctlbyname(name, nullptr, &len, nullptr, 0) != 0 || len == 0)
-        return std::string();
-    std::string out(len, '\0');
-    if (sysctlbyname(name, out.data(), &len, nullptr, 0) != 0)
-        return std::string();
-    if (!out.empty() && out.back() == '\0') out.pop_back();
-    return out;
-}
-
-static uint64_t cemu_sysctl_u64(const char* name)
-{
-    uint64_t v = 0; size_t len = sizeof(v);
-    if (sysctlbyname(name, &v, &len, nullptr, 0) == 0) return v;
-    uint32_t v32 = 0; len = sizeof(v32);
-    if (sysctlbyname(name, &v32, &len, nullptr, 0) == 0) return v32;
-    return 0;
-}
-
-extern "C" const char* cemu_bridge_device_report(void)
-{
-    if (!g_deviceReport.empty())
-        return g_deviceReport.c_str();
-
-    const std::string model = cemu_sysctl_string("hw.machine");
-    const uint64_t memBytes = cemu_sysctl_u64("hw.memsize");
-    const uint64_t cores    = cemu_sysctl_u64("hw.ncpu");
-    const uint64_t pcores   = cemu_sysctl_u64("hw.perflevel0.logicalcpu");
-    const uint64_t ecores   = cemu_sysctl_u64("hw.perflevel1.logicalcpu");
-
-    unsigned long long avail = 0, foot = 0;
-    cemu_bridge_memory_status(&avail, &foot);
-
-    char buf[1024];
-    snprintf(buf, sizeof(buf),
-        "device: %s | iOS %s | RAM %llu MB | cores %llu",
-        model.empty() ? "unknown" : model.c_str(),
-        [[[NSProcessInfo processInfo] operatingSystemVersionString] UTF8String],
-        (unsigned long long)(memBytes / (1024ull * 1024ull)),
-        (unsigned long long)cores);
-    g_deviceReport = buf;
-
-    if (pcores && ecores)
-    {
-        snprintf(buf, sizeof(buf), " (%llu perf + %llu eff)",
-                 (unsigned long long)pcores, (unsigned long long)ecores);
-        g_deviceReport += buf;
-    }
-    if (avail)
-    {
-        snprintf(buf, sizeof(buf), " | %llu MB available to this app before iOS kills it",
-                 (unsigned long long)(avail / (1024ull * 1024ull)));
-        g_deviceReport += buf;
-    }
-    // Two appends, not literal juxtaposition. BUILD_VERSION_STRING is a parenthesised
-    // expression - ("2" "." "0" ...) - not a bare string literal, so writing
-    // " | build " BUILD_VERSION_STRING parses as calling a char array.
-    g_deviceReport += " | build ";
-    g_deviceReport += BUILD_VERSION_STRING;
-    return g_deviceReport.c_str();
 }
 
 bool cemu_bridge_memory_status(unsigned long long* availableBytes, unsigned long long* footprintBytes) {
@@ -473,8 +352,6 @@ void cemu_bridge_start_memory_watchdog(void) {
     #include "config/CemuConfig.h"
     #include "audio/IAudioAPI.h"
     #include "Cafe/HW/Espresso/PPCState.h"
-    #include "Cafe/HW/Espresso/Recompiler/PPCRecompiler.h"
-    #include "Cafe/HW/Latte/Renderer/Metal/MetalBinaryArchive.h"
     #include "Common/version.h"
     #include <filesystem>
     #include <set>
@@ -508,13 +385,6 @@ void cemu_bridge_start_memory_watchdog(void) {
     void IOSInput_RefreshDevices();
     void IOSInput_SetButtonState(int button, bool pressed);
     void IOSInput_SetStickAxis(int stick, float x, float y);
-    void IOSInput_SetTouch(bool touched, float x, float y);
-
-    // Defined in src/gui/iosgui/IOSTitleConvert.cpp.
-    int  IOSTitleConvert_Start(const char* sourcePath, const char* outputPath, int asFolder);
-    void IOSTitleConvert_Poll(IOSConvertProgress* out);
-    void IOSTitleConvert_Cancel(void);
-    int  IOSTitleConvert_Result(char* errBuf, int errBufLen);
     void IOSInput_ReleaseAllButtons();
 
     // Defined in src/gui/iosgui/IOSTitleLaunch.cpp - the real-title launch path, kept on
@@ -719,9 +589,6 @@ constexpr uint32_t     kCsDebugged  = 0x10000000u; // CS_DEBUGGED
 std::filesystem::path g_jitSentinelPath;
 std::atomic<bool> g_jitSentinelArmed{false};
 
-// Defined below, registered above it - see ios_jit_is_permitted().
-void ios_jit_survived_boot();
-
 // Reads back the build id stamped on the sentinel's first line. Returns an empty string
 // for a sentinel written by a build that predates the stamp, which reads as "not this
 // build" and therefore gets a retry - the desired answer for exactly those builds.
@@ -839,7 +706,7 @@ bool ios_jit_is_permitted(const std::filesystem::path& sentinelPath)
 	}
 
 	// Arm the sentinel for the whole recompiler-enabled boot, not for a single call.
-	// Disarmed by ios_jit_survived_boot(), on the first return out of generated code.
+	// Disarmed by ios_jit_survived_boot() once a title has actually launched.
 	const std::string sentinelNative = sentinelPath.string();
 	const int sentinelFd = open(sentinelNative.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (sentinelFd < 0)
@@ -864,10 +731,6 @@ bool ios_jit_is_permitted(const std::filesystem::path& sentinelPath)
 
 	g_jitSentinelPath = sentinelPath;
 	g_jitSentinelArmed.store(true);
-	// Disarm on the only event that proves the recompiler survived: control returning out
-	// of generated code. Registering it here rather than at title launch is the entire fix -
-	// see ios_jit_survived_boot() below for what the old placement cost.
-	PPCRecompiler_setSurvivedFirstEntryCallback(+[]() { ios_jit_survived_boot(); });
 
 	cemuLog_log(LogType::Force,
 		"JIT check: PASSED - executable pages are available and CS_DEBUGGED is set (cs_flags 0x{:08x}), so the "
@@ -882,18 +745,8 @@ bool ios_jit_is_permitted(const std::filesystem::path& sentinelPath)
 	return true;
 }
 
-// Called once control has returned ALIVE from recompiled code. Until this runs, the
-// sentinel on disk says the last JIT boot did not finish.
-//
-// It used to be called from the two boot paths below, right after LaunchForegroundTitle()
-// returned, and that was worse than useless. Brandon's v1.37 log clears the sentinel at
-// 15:19:53.606 and takes SIGBUS afterwards, because a title launching says nothing about
-// whether the recompiler can run: the first entry into generated code is roughly three
-// seconds later, and on iOS that entry is precisely where a mapping that mprotect promoted
-// but code-signing never honoured kills the process. So the sentinel was always already
-// deleted by the time it was needed, it never caught a single JIT crash, and every relaunch
-// turned the recompiler straight back on - which is exactly why Brandon reported that
-// enabling JIT crashes every time rather than once.
+// Called once a title has actually launched with the recompiler live. Until this runs,
+// the sentinel on disk says the last JIT boot did not finish.
 void ios_jit_survived_boot()
 {
 	if (!g_jitSentinelArmed.exchange(false))
@@ -1066,11 +919,6 @@ void cemu_bridge_initialize(const char* mlcPath) {
     std::error_code fontsEc, profilesEc;
     const bool haveFonts = fs::exists(dataPath / "resources" / "sharedFonts" / "CafeStd.ttf", fontsEc);
     const bool haveProfiles = fs::exists(dataPath / "gameProfiles" / "default", profilesEc);
-    // First line of every boot, before anything that might fail. If a log reaches us
-    // from a device nobody here owns, this is the line that makes the rest of it mean
-    // something.
-    cemuLog_log(LogType::Force, "iOS {}", cemu_bridge_device_report());
-
     cemuLog_log(LogType::Force, "iOS data path: {} (shared fonts present: {}, default game profiles present: {})",
         _pathToUtf8(dataPath), haveFonts, haveProfiles);
 
@@ -1583,9 +1431,9 @@ CemuBridgeStatus cemu_bridge_boot_rpx(const char* rpxPath) {
             cemu_bridge_log_checkpoint("boot_rpx: about to call LaunchForegroundTitle");
             CafeSystem::LaunchForegroundTitle();
             cemu_bridge_log_checkpoint("boot_rpx: LaunchForegroundTitle returned");
-            // The JIT sentinel is deliberately NOT cleared here. A launched title proves
-            // nothing about the recompiler; PPCRecompiler_enter() clears it on the first
-            // return out of generated code instead.
+            // Reaching here means a recompiler-enabled boot got a title running, so the
+            // sentinel armed by ios_jit_is_permitted() has nothing left to warn about.
+            ios_jit_survived_boot();
             // After the launch call, not before: the ladder measures time from a title that
             // is actually running, and starting it during prepare would spend its first step
             // on disc mounting rather than on anything the clock affects.
@@ -1633,7 +1481,9 @@ CemuBridgeStatus cemu_bridge_boot_title(const char* path) {
             cemu_bridge_log_checkpoint("boot_title: about to call LaunchForegroundTitle");
             CafeSystem::LaunchForegroundTitle();
             cemu_bridge_log_checkpoint("boot_title: LaunchForegroundTitle returned");
-            // Same here: not cleared on launch. See ios_jit_survived_boot().
+            // Reaching here means a recompiler-enabled boot got a title running, so the
+            // sentinel armed by ios_jit_is_permitted() has nothing left to warn about.
+            ios_jit_survived_boot();
             // Same call, same position, and for the same reason as in cemu_bridge_boot_rpx()
             // above - which until now was the only place it appeared, and which the app never
             // calls. EmulationEngine.bootBlocking() goes to cemu_bridge_boot_title() for
@@ -1993,60 +1843,6 @@ void cemu_bridge_set_stick_axis(CemuBridgeStick stick, float x, float y) {
     IOSInput_SetStickAxis((int)stick, x, y);
 #else
     (void)stick; (void)x; (void)y;
-#endif
-}
-
-int cemu_bridge_convert_to_wua_start(const char* sourcePath, const char* outputPath, bool asFolder) {
-#if defined(CEMU_CORE_AVAILABLE)
-    return IOSTitleConvert_Start(sourcePath, outputPath, asFolder ? 1 : 0);
-#else
-    (void)sourcePath; (void)outputPath; (void)asFolder; return 0;
-#endif
-}
-
-void cemu_bridge_convert_to_wua_poll(IOSConvertProgress* out) {
-#if defined(CEMU_CORE_AVAILABLE)
-    IOSTitleConvert_Poll(out);
-#else
-    (void)out;
-#endif
-}
-
-void cemu_bridge_convert_to_wua_cancel(void) {
-#if defined(CEMU_CORE_AVAILABLE)
-    IOSTitleConvert_Cancel();
-#endif
-}
-
-int cemu_bridge_convert_to_wua_result(char* errBuf, int errBufLen) {
-#if defined(CEMU_CORE_AVAILABLE)
-    return IOSTitleConvert_Result(errBuf, errBufLen);
-#else
-    (void)errBuf; (void)errBufLen; return 1;
-#endif
-}
-
-void cemu_bridge_set_pipeline_cache_enabled(bool enabled) {
-#if defined(CEMU_CORE_AVAILABLE)
-    MetalBinaryArchive::SetEnabled(enabled);
-#else
-    (void)enabled;
-#endif
-}
-
-bool cemu_bridge_pipeline_cache_enabled(void) {
-#if defined(CEMU_CORE_AVAILABLE)
-    return MetalBinaryArchive::IsEnabled();
-#else
-    return false;
-#endif
-}
-
-void cemu_bridge_set_touch(bool touched, float x, float y) {
-#if defined(CEMU_CORE_AVAILABLE)
-    IOSInput_SetTouch(touched, x, y);
-#else
-    (void)touched; (void)x; (void)y;
 #endif
 }
 

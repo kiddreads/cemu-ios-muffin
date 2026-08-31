@@ -177,8 +177,6 @@ void LatteThread_HeartbeatEntry()
 	uint64 lastCyclesRetired = 0;
 	uint64 lastTimeslices = 0;
 	uint64 lastIdleSpins = 0;
-	uint64 lastInterpreterTsc = 0;
-	uint64 lastInterpreterInstructions = 0;
 	bool guestSeenAlive = false;
 	bool osScreenEverUsed = false;
 	while (sLatteHeartbeatRunning)
@@ -214,31 +212,6 @@ void LatteThread_HeartbeatEntry()
 		PPCCore_getLiveness(guest);
 		const double mips = (double)(guest.cyclesRetired - lastCyclesRetired) / windowSeconds / 1000000.0;
 
-		// The same throughput measured AT the interpreter loop rather than across the whole
-		// window, plus how much of the window that loop actually occupied.
-		//
-		// The MIPS figure above is real but its denominator is wall time, which includes
-		// cores idle-spinning with nothing runnable, time inside HLE, and time blocked on
-		// the GPU. It therefore drops when the title is WAITING, which says nothing about
-		// how fast the interpreter is. These two numbers separate those: the first is what
-		// the interpreter achieves while it is running, the second is the ceiling on what
-		// making it faster could ever be worth. A loop occupying a third of the window
-		// means doubling its speed buys about a sixth overall - worth knowing before the
-		// work, not after.
-		const uint64 interpTscDelta = guest.interpreterTsc - lastInterpreterTsc;
-		const uint64 interpInstrDelta = guest.interpreterInstructions - lastInterpreterInstructions;
-		const uint64 tscPerSecond = PPCTimer_microsecondsToTsc(1000000ull);
-		std::string interpreterText;
-		if (interpTscDelta > 0 && tscPerSecond > 0)
-		{
-			const double interpSeconds = (double)interpTscDelta / (double)tscPerSecond;
-			const double inLoopMips = (double)interpInstrDelta / interpSeconds / 1000000.0;
-			// Summed across three cores, so this can legitimately exceed 100% of one
-			// window - that is three cores each busy, not a broken measurement.
-			const double occupancy = interpSeconds / windowSeconds * 100.0;
-			interpreterText = fmt::format(" | interpreter: {:.2f} MIPS in-loop, {:.0f}% of wall time", inLoopMips, occupancy);
-		}
-
 		// The guest-CPU half goes first because it is the half that decides what the rest of
 		// the line means. Before GX2Init every GPU-side number below is structurally zero -
 		// GX2 frames cannot exist yet, and OSScreen is a different API that a GX2 title never
@@ -246,10 +219,10 @@ void LatteThread_HeartbeatEntry()
 		// invite. Whether the emulated CPU is retiring instructions is the one measurement
 		// that separates "slow" from "stuck", and it belongs where it is read first.
 		cemuLog_log(LogType::Force,
-			"Heartbeat: {:.1f}s - GX2Init {} | guest CPU: {} instr (+{}, {:.2f} MIPS){}, {} timeslices (+{}), idle spins {} (+{}), cores at 0x{:08x}/0x{:08x}/0x{:08x} | GX2 frames {} (+{}, {:.2f} fps){}",
+			"Heartbeat: {:.1f}s - GX2Init {} | guest CPU: {} instr (+{}, {:.2f} MIPS), {} timeslices (+{}), idle spins {} (+{}), cores at 0x{:08x}/0x{:08x}/0x{:08x} | GX2 frames {} (+{}, {:.2f} fps){}",
 			std::chrono::duration<double>(now - startTime).count(),
 			LatteGPUState.gx2InitCalled ? "reached" : "NOT reached",
-			guest.cyclesRetired, guest.cyclesRetired - lastCyclesRetired, mips, interpreterText,
+			guest.cyclesRetired, guest.cyclesRetired - lastCyclesRetired, mips,
 			guest.timeslices, guest.timeslices - lastTimeslices,
 			guest.coreIdleSpins, guest.coreIdleSpins - lastIdleSpins,
 			guest.coreInstructionPointer[0], guest.coreInstructionPointer[1], guest.coreInstructionPointer[2],
@@ -295,8 +268,6 @@ void LatteThread_HeartbeatEntry()
 		lastCyclesRetired = guest.cyclesRetired;
 		lastTimeslices = guest.timeslices;
 		lastIdleSpins = guest.coreIdleSpins;
-		lastInterpreterTsc = guest.interpreterTsc;
-		lastInterpreterInstructions = guest.interpreterInstructions;
 		lastTime = now;
 	}
 	// A stopped heartbeat must not leave its last rate standing, or anything polling this

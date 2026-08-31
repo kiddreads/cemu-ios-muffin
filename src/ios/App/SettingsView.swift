@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 import UniformTypeIdentifiers
 
 private extension Bundle {
@@ -11,11 +10,6 @@ private extension Bundle {
 }
 
 struct SettingsView: View {
-    /// The skin the pad is currently wearing, so the preview below shows what the user
-    /// will actually see rather than whichever skin this file happened to default to.
-    /// Passed in because the selection lives in ContentView's state, not in UserDefaults.
-    var skin: WiiUControllerSkin = WiiUControllerSkin.standard
-
     @ObservedObject var gameManager: GameManager
     @Environment(\.dismiss) private var dismiss
     @State private var showingIconPicker = false
@@ -27,10 +21,6 @@ struct SettingsView: View {
     /// not in this sheet's hierarchy, and AppStorage is what makes the setting outlive
     /// the sheet anyway.
     @AppStorage(LaunchLogSettings.showKey) private var showLaunchLog = true
-    @State private var deviceReportCopied = false
-    /// Computed on demand. The bridge owns the string and it is stable for the
-    /// process's lifetime, so there is nothing to refresh and nothing to invalidate.
-    private var deviceReport: String { String(cString: cemu_bridge_device_report()) }
     /// Read by DisplayRouter through `RenderScale.current` at surface-registration time,
     /// not observed by it - hence AppStorage here and a plain UserDefaults read there.
     @AppStorage(RenderScale.storageKey) private var renderScaleRaw = RenderScale.balanced.rawValue
@@ -59,15 +49,6 @@ struct SettingsView: View {
     // which control scheme is on.
     @AppStorage(ControllerLayoutSettings.joystickKey)
     private var joystickMode = ControllerLayoutSettings.defaultJoystick
-    @AppStorage(ControllerLayoutSettings.showTriggersKey)
-    private var showTriggers = ControllerLayoutSettings.defaultShowTriggers
-    @AppStorage(ControllerLayoutSettings.showHomeKey)
-    private var showHome = ControllerLayoutSettings.defaultShowHome
-    @AppStorage(ControllerLayoutSettings.startSelectLabelsKey)
-    private var startSelectLabels = ControllerLayoutSettings.defaultStartSelectLabels
-    /// On by default. Mirrored into the engine on change and at appear, because the
-    /// engine reads it once when a title opens its cache and cannot see UserDefaults.
-    @AppStorage("muffin.pipelineCacheEnabled") private var pipelineCacheEnabled = true
     @AppStorage(ControllerLayoutSettings.deadzoneKey)
     private var stickDeadzone = ControllerLayoutSettings.defaultDeadzone
     @AppStorage(ControllerLayoutSettings.stickCurveKey)
@@ -99,42 +80,6 @@ struct SettingsView: View {
                     }
 
                     Section {
-                        // Shown above the toggles rather than below them, because every
-                        // control in this section changes what it looks like and the
-                        // answer should be visible while you are deciding.
-                        ControllerPreview(skin: skin)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
-
-                        Toggle(isOn: $showTriggers) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Show ZL and ZR")
-                                Text("The two rear triggers. Real GamePad buttons that plenty of titles need, but they sit where a thumb resting on a shoulder button lands.")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .tint(MuffinTheme.pixelBlue)
-
-                        Toggle(isOn: $showHome) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Show HOME")
-                                Text("Reaches the game, but does not open a Home Menu - Muffin does not emulate one. Off by default for that reason.")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .tint(MuffinTheme.pixelBlue)
-
-                        Toggle(isOn: $startSelectLabels) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Label + and - as START and SELECT")
-                                Text("Printed underneath them, the way the console prints them.")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .tint(MuffinTheme.pixelBlue)
-
                         Toggle(isOn: $joystickMode) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Joystick instead of d-pad")
@@ -304,59 +249,6 @@ struct SettingsView: View {
                     // Collection is always on regardless (see IOSLiveLog.h) - gating
                     // that too would mean the toggle could only ever show the boot AFTER
                     // the one that failed.
-                    // The device report, above the diagnostics toggles because it is
-                    // the thing to send FIRST when something is wrong.
-                    //
-                    // MuffinEMU installs on any arm64 iPhone or iPad running iOS 15 or
-                    // later, and almost none of those have ever run it. Every finding on
-                    // this port so far - no BC texture formats, no mesh shaders, the
-                    // memory ceiling - depended on knowing exactly which chip was under
-                    // it, and a report from hardware nobody here owns is unanswerable
-                    // without that. One tap to copy is the difference between a bug
-                    // report that can be acted on and one that cannot.
-                    Section {
-                        Text(deviceReport)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Button {
-                            UIPasteboard.general.string = deviceReport
-                            deviceReportCopied = true
-                        } label: {
-                            Label(deviceReportCopied ? "Copied" : "Copy device report",
-                                  systemImage: deviceReportCopied ? "checkmark" : "doc.on.doc")
-                        }
-                    } header: {
-                        Text("This device")
-                    } footer: {
-                        Text("Send this with any bug report. It says which chip, how much memory, and which build - which is what makes everything else in a log mean something.")
-                    }
-                    .foregroundColor(MuffinTheme.brownDarkest)
-
-                    // Kept next to the launch log rather than with the control toggles:
-                    // both are about what the emulator does rather than how it looks, and
-                    // this is the one somebody turns off when a build misbehaves.
-                    Section {
-                        Toggle(isOn: $pipelineCacheEnabled) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Keep compiled shaders between launches")
-                                Text("Without this, every launch re-translates the game's shaders and rebuilds every GPU pipeline from scratch - which is what the loading screen is. With it, that work is done once per game on this device.")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .tint(MuffinTheme.pixelBlue)
-                        .onChange(of: pipelineCacheEnabled) { newValue in
-                            cemu_bridge_set_pipeline_cache_enabled(newValue)
-                        }
-                    } header: {
-                        Text("Performance")
-                    } footer: {
-                        Text("It cannot compile shaders a game has never run - the Wii U only reveals them as it draws. What it removes is doing the same work again on every launch.")
-                    }
-                    .foregroundColor(MuffinTheme.brownDarkest)
-
                     Section {
                         Toggle(isOn: $showLaunchLog) {
                             Label("Show launch log", systemImage: "text.alignleft")

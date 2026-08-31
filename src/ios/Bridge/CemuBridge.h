@@ -240,20 +240,6 @@ const char* cemu_bridge_status_text(void);
 /// process termination (e.g. a GPU driver panic) - call this at every meaningful
 /// startup milestone from Swift so a crash's location can be narrowed down from the
 /// surviving log alone.
-// Give THIS thread a signal stack, so a stack overflow on it can still be reported.
-// sigaltstack is per-thread on Darwin; without this a thread that overflows dies with
-// no crash block at all. Call it first thing on any thread that runs engine code.
-void cemu_bridge_install_thread_crash_stack(void);
-
-// One line describing the machine: model identifier, iOS version, RAM, core layout,
-// how much memory iOS will let this app have, and the build. Stable for the process's
-// lifetime, owned by the bridge, safe to hold.
-//
-// This exists so a report from a device nobody here owns is answerable. Every finding
-// on this port so far has depended on knowing the target hardware, and until now the
-// log never recorded it.
-const char* cemu_bridge_device_report(void);
-
 void cemu_bridge_log_checkpoint(const char* message);
 
 /// Current memory position of this process, in bytes. `availableBytes` is the
@@ -353,65 +339,6 @@ void cemu_bridge_set_button_state(CemuBridgeButton button, bool pressed);
 /// control panel being dismissed, the app going to the background, a gesture the system
 /// cancelled out from under it - and would otherwise leave the title holding a direction
 /// with nothing on screen touching it.
-// Reports the device's touchscreen as the GamePad's.
-//
-// x and y are normalised 0..1 across the GAMEPAD SURFACE - the view the pad screen is
-// actually being drawn into - with y measured downward from the top, which is how UIKit
-// hands touches over. The caller maps from its own view's bounds because only it knows
-// where that surface is; passing whole-screen coordinates puts every touch in the wrong
-// place the moment the pad is not fullscreen.
-//
-// The real GamePad touchscreen is resistive and single-touch. There is no way for the
-// guest to receive a second finger, so send one point.
-//
-// Pass touched=false on end/cancel. Coordinates are ignored then and the last position is
-// deliberately kept - some titles read the coordinates after the touch is released.
-// Converting an encrypted disc image into a decrypted .wua, on the device.
-//
-// A .wud or .wux needs a matching key from the user's keys.txt every time it is opened.
-// The .wua this produces is decrypted, roughly a third to a half the size, opens with no
-// keys at all, and is a single file. Muffin implements no cryptography to do it - the
-// engine already decrypts these formats to READ them, and this writes out what it reads.
-//
-// Runs on its own 16 MB-stack thread. One at a time: it is disk-bound and the device has
-// one disk. Start returns 0 if another is already running.
-typedef struct IOSConvertProgress {
-    int stage;                              // mirrors WuaWriter::Stage
-    unsigned int totalFileCount;
-    unsigned int currentFileIndex;
-    unsigned long long totalInputBytes;
-    unsigned long long transferredInputBytes;
-} IOSConvertProgress;
-
-/// asFolder: 0 writes a .wua, 1 writes a plain code/content/meta folder.
-///
-/// A .wua is compressed with zstd, so it is a third to a half the size and every read
-/// decompresses. A folder is uncompressed and read straight off the filesystem, at two
-/// to three times the disk. Which is better depends on whether the device is short of
-/// storage or short of CPU, so it is the user's call rather than ours.
-///
-/// Note that neither can be a bare .rpx: an .rpx is only the executable, and a retail
-/// title is code/ plus content/ plus meta/ - the assets are most of the game and most of
-/// the bytes. An .rpx on its own would boot nothing.
-int  cemu_bridge_convert_to_wua_start(const char* sourcePath, const char* outputPath, bool asFolder);
-void cemu_bridge_convert_to_wua_poll(IOSConvertProgress* out);
-void cemu_bridge_convert_to_wua_cancel(void);
-/// -1 while running, 0 succeeded, 1 failed. On failure errBuf receives a sentence meant
-/// for a person, not an error code.
-int  cemu_bridge_convert_to_wua_result(char* errBuf, int errBufLen);
-
-/// Whether compiled GPU pipelines are kept on disk between launches.
-///
-/// On by default. Without it every launch re-translates every shader to Metal and
-/// recompiles every pipeline from scratch, which is the loading screen - with it, that
-/// work is done once per title per device. A switch exists because it is new, it writes
-/// a file that can grow, and being able to turn it off without waiting for a build is
-/// worth more than the tidiness of not having the setting.
-void cemu_bridge_set_pipeline_cache_enabled(bool enabled);
-bool cemu_bridge_pipeline_cache_enabled(void);
-
-void cemu_bridge_set_touch(bool touched, float x, float y);
-
 void cemu_bridge_release_all_buttons(void);
 
 /// Which analog stick an axis call is about.

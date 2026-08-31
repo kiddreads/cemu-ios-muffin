@@ -361,12 +361,6 @@ struct ControllerSkinSelector: View {
                 }
             }
 
-            // The whole pad, at the transparency it will actually have over a game.
-            // Swatches say what colour a button is; only this says whether the layout
-            // suits your thumbs and whether you will still be able to see through it.
-            ControllerPreview(skin: selectedSkin)
-                .frame(maxWidth: .infinity)
-
             if showingSelector {
                 VStack(spacing: 8) {
                     ScrollView(.vertical, showsIndicators: false) {

@@ -27,6 +27,10 @@ on:
   push:
     branches:
       - ios-audio-and-renderscale
+      # v1.38's renderer restored wholesale, with only the CPU and JIT work carried
+      # forward. Its own branch so it builds and releases without touching either of
+      # the other lines.
+      - ios-v138-renderer-restore
     # Documentation cannot change the binary, and a 20-minute build for a comment edit is
     # 20 minutes of runner nobody gets back.
     paths-ignore:
@@ -184,8 +188,8 @@ jobs:
         if: inputs.release_tag != '' || github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || format('auto-{0}', github.sha) }}
-          name: ${{ inputs.release_tag != '' && inputs.release_tag || format('Automatic build {0}', github.sha) }}
+          tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || (github.ref_name == 'ios-v138-renderer-restore' && format('v138r-{0}', github.sha) || format('auto-{0}', github.sha)) }}
+          name: ${{ inputs.release_tag != '' && inputs.release_tag || (github.ref_name == 'ios-v138-renderer-restore' && format('v1.38 renderer restored {0}', github.sha) || format('Automatic build {0}', github.sha)) }}
           generate_release_notes: true
           files: |
             Cemu.ipa

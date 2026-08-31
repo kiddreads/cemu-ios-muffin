@@ -30,18 +30,7 @@ public:
 			return;
 
 		// Create thread pool
-		//
-		// This pool compiles MSL source into Metal libraries, and that is the half of the
-		// per-launch cost that a pipeline binary cache cannot remove - a compiled-pipeline
-		// lookup still needs real MTLFunctions, so newLibrary(source) runs regardless. It
-		// is therefore the shader-cache loading screen's floor.
-		//
-		// It was hardcoded to 2 while the pipeline pool right next to it already sizes
-		// itself from the core count (MetalPipelineCache.cpp:54). On an eight-core device
-		// that left most of the machine idle during exactly the wait this is trying to
-		// shorten. One is left for the render thread; the ceiling is there because these
-		// are compile jobs on a fanless phone or tablet and thermal headroom is finite.
-		const uint32 threadCount = std::clamp(GetPhysicalCoreCount() - 1, 2u, 6u);
+		const uint32 threadCount = 2;
 		for (uint32 i = 0; i < threadCount; ++i)
 			s_threads.emplace_back(&ShaderMtlThreadPool::CompilerThreadFunc, this);
 

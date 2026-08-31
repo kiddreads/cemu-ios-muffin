@@ -14,7 +14,6 @@ struct ContentView: View {
             if showingGameBrowser {
                 GameBrowserView(
                     gameManager: gameManager,
-                    controllerSkin: $selectedSkin,
                     selectedGame: $selectedGame,
                     showingGameBrowser: $showingGameBrowser,
                     showingFavorites: $showingFavorites
@@ -138,43 +137,20 @@ struct BootFailureView: View {
 
 struct GameBrowserView: View {
     @ObservedObject var gameManager: GameManager
-    /// Only so Settings can preview the pad wearing the skin actually in use. A binding
-    /// rather than a copy because the skin picker inside Settings can change it.
-    @Binding var controllerSkin: WiiUControllerSkin
     @Binding var selectedGame: GameMetadata?
     @Binding var showingGameBrowser: Bool
     @Binding var showingFavorites: Bool
     @State private var searchText = ""
     @State private var showingIconPicker = false
     @State private var showingSettings = false
-    /// Which KIND of import the user asked for. A document picker only lets you SELECT
-    /// a directory when UTType.folder is among its allowed types; with a file-only type
-    /// list, tapping a folder navigates into it and there is no way to choose it. A full
-    /// Wii U dump IS a directory (code/, content/, meta/), so one set of allowed types
-    /// cannot serve both without making folder taps ambiguous. Two entry points, two
-    /// type lists - but ONE .fileImporter.
-    ///
-    /// It used to be two Bools driving two .fileImporter modifiers stacked on the same
-    /// view, and that is why importing was broken: SwiftUI keeps only one presentation
-    /// of a given kind per view, so the second modifier wins and the first silently
-    /// never presents. Tapping the entry point that lost did nothing at all - no picker,
-    /// no error, no way to tell from the outside that anything was wrong.
-    enum ImportKind: Identifiable {
-        case file
-        case folder
-        var id: Self { self }
-
-        /// .item, not .data or a list of ROM types. iOS has no built-in UTType for .rpx,
-        /// .wux, .wud or .wua, so any type-filtered list greys out exactly the files the
-        /// button exists to import. .item is the root of the type hierarchy: everything
-        /// matches, nothing is greyed out, and GameManager.importROM does the deciding
-        /// afterwards against its own copy. .data is nearly as permissive but still
-        /// depends on the provider having resolved a byte-stream type at all; .item
-        /// does not.
-        var contentTypes: [UTType] { self == .folder ? [.folder] : [.item] }
-    }
-
-    @State private var importKind: ImportKind?
+    @State private var showingROMImporter = false
+    /// Separate from showingROMImporter on purpose. A document picker only lets you
+    /// SELECT a directory when UTType.folder is among its allowed types; with a
+    /// file-only type list, tapping a folder navigates into it and there is no way to
+    /// choose it. A full Wii U dump IS a directory (code/, content/, meta/), so one
+    /// picker cannot serve both without making folder taps ambiguous. Two explicit
+    /// entry points, two pickers.
+    @State private var showingFolderImporter = false
     @State private var romImportErrorMessage: String?
 
     var filteredGames: [GameMetadata] {
@@ -228,12 +204,12 @@ struct GameBrowserView: View {
 
                             Menu {
                                 Button {
-                                    importKind = .file
+                                    showingROMImporter = true
                                 } label: {
                                     Label("Game file (.wux, .wud, .wua, .iso, .rpx)", systemImage: "doc")
                                 }
                                 Button {
-                                    importKind = .folder
+                                    showingFolderImporter = true
                                 } label: {
                                     Label("Game folder (code / content / meta)", systemImage: "folder")
                                 }
@@ -306,20 +282,28 @@ struct GameBrowserView: View {
             IconPickerView()
         }
         .sheet(isPresented: $showingSettings) {
-            SettingsView(skin: controllerSkin, gameManager: gameManager)
+            SettingsView(gameManager: gameManager)
         }
-        // ONE importer. See ImportKind above for why two of them meant neither worked.
-        // The allowed types are read at presentation time, so setting importKind and
-        // presenting in the same state change gives the picker the right list.
+        // .item, not .data or a list of ROM types. iOS has no built-in UTType for .rpx,
+        // .wux, .wud or .wua, so any type-filtered list greys out exactly the files this
+        // button exists to import - which is the reported "it only opens folders, you
+        // cannot select things". .item is the root of the type hierarchy: everything
+        // matches, nothing is greyed out, and GameManager.importROM does the deciding
+        // afterwards against its own copy. .data is nearly as permissive but still
+        // depends on the provider having resolved a byte-stream type for the file at
+        // all; .item does not.
         .fileImporter(
-            isPresented: Binding(
-                get: { importKind != nil },
-                set: { if !$0 { importKind = nil } }
-            ),
-            allowedContentTypes: (importKind ?? .file).contentTypes,
+            isPresented: $showingROMImporter,
+            allowedContentTypes: [.item],
             allowsMultipleSelection: false
         ) { result in
-            importKind = nil
+            handleImport(result)
+        }
+        .fileImporter(
+            isPresented: $showingFolderImporter,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
             handleImport(result)
         }
         .alert("Couldn't import ROM", isPresented: .constant(romImportErrorMessage != nil), presenting: romImportErrorMessage) { _ in
@@ -569,17 +553,6 @@ struct EmulatorViewOptimized: View {
     @StateObject private var launchLog = LaunchLogStore()
     @State private var launchLogDismissed = false
 
-    /// Which Wii U screen this device is showing. Mirrors DisplayRouter, which owns the
-    /// truth; this copy exists so the button can redraw itself.
-    @State private var showingGamePadScreen = false
-    /// Whether the on-screen controls are drawn at all.
-    ///
-    /// Not @AppStorage: hiding the controls is something you do for a moment to see the
-    /// whole screen or to touch it without obstruction, not a preference. Coming back to
-    /// a game and finding no controls, with no memory of having hidden them, is a bug
-    /// from the player's side even if the state was faithfully restored.
-    @State private var controlsHidden = false
-
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -633,39 +606,6 @@ struct EmulatorViewOptimized: View {
                             Image(systemName: isEditingControlLayout
                                   ? "checkmark.circle.fill"
                                   : "arrow.up.and.down.and.arrow.left.and.right")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .buttonStyle(MuffinSecondaryButtonStyle())
-
-                        // TV screen <-> GamePad screen. In the top bar rather than in the
-                        // control cluster because it is a mode change, not an input.
-                        //
-                        // Both surfaces stay registered and both keep rendering, so this
-                        // is a reordering rather than a teardown - which is what makes it
-                        // instant and why it can be pressed repeatedly without cost.
-                        Button(action: {
-                            showingGamePadScreen.toggle()
-                            DisplayRouter.shared.setDeviceScreen(showingGamePadScreen ? .gamepad : .tv)
-                        }) {
-                            Image(systemName: showingGamePadScreen ? "tv" : "ipad.landscape")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .buttonStyle(MuffinSecondaryButtonStyle())
-
-                        // Hide/show the controls.
-                        //
-                        // This button must NOT live in the control cluster, because that
-                        // is the thing being hidden - it would take itself away and leave
-                        // no way back. It stays here, always present, for that reason.
-                        Button(action: {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                controlsHidden.toggle()
-                            }
-                            // A button held at the moment the controls stop being able to
-                            // report their own release would stay held inside the title.
-                            cemu_bridge_release_all_buttons()
-                        }) {
-                            Image(systemName: controlsHidden ? "eye.slash" : "eye")
                                 .font(.system(size: 12, weight: .semibold))
                         }
                         .buttonStyle(MuffinSecondaryButtonStyle())
@@ -743,39 +683,6 @@ struct EmulatorViewOptimized: View {
             // No VStack/Spacer any more: the pad positions every control itself against
             // the size it is handed, which is what lets one half be dragged somewhere a
             // bottom-aligned stack could never have put it.
-            // The GamePad touchscreen, when the device is showing that screen.
-            //
-            // UNDER the controls, so a control still wins where one is drawn - the
-            // alternative is a d-pad press also registering as a touch on the map behind
-            // it. With the controls hidden this covers the whole area, which is the point
-            // of being able to hide them.
-            //
-            // Coordinates are normalised against THIS view's bounds rather than the
-            // screen's, because the bridge maps 0..1 onto the pad surface and the pad
-            // surface is what this sits over.
-            if showingGamePadScreen {
-                GeometryReader { geo in
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .gesture(
-                            // minimumDistance 0 so a tap registers, not just a drag. A
-                            // Wii U touchscreen is resistive and single-touch, so one
-                            // point is all the guest can receive - there is nothing to
-                            // gain from modelling more.
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    let x = Float(value.location.x / max(geo.size.width, 1))
-                                    let y = Float(value.location.y / max(geo.size.height, 1))
-                                    cemu_bridge_set_touch(true, x, y)
-                                }
-                                .onEnded { _ in
-                                    cemu_bridge_set_touch(false, 0, 0)
-                                }
-                        )
-                }
-                .ignoresSafeArea()
-            }
-
             OptimizedControlPanel(
                 skin: controllerSkin,
                 onInput: { label, pressed in
@@ -794,11 +701,6 @@ struct EmulatorViewOptimized: View {
                 },
                 isEditingLayout: $isEditingControlLayout
             )
-            // Hidden means gone, not transparent: a control left in the hierarchy at zero
-            // opacity still swallows the touches that were supposed to reach the GamePad
-            // screen underneath it, which is the whole reason for hiding it.
-            .opacity(controlsHidden ? 0 : 1)
-            .allowsHitTesting(!controlsHidden)
 
             // The Metal view above must mount (so it can register the render
             // surface) before boot() actually runs, so this state genuinely
@@ -1005,12 +907,6 @@ private func cemuBridgeButton(forLabel label: String) -> CemuBridgeButton {
 
     case "plus":  return CEMU_BRIDGE_BUTTON_PLUS
     case "minus": return CEMU_BRIDGE_BUTTON_MINUS
-
-    // The Wii U Home Menu is not emulated, so this reaches the title rather than opening
-    // anything - which is right: a title that watches for HOME to pause itself should
-    // still see it. Off by default in Settings for exactly the reason it does less than
-    // the console's does.
-    case "HOME": return CEMU_BRIDGE_BUTTON_HOME
 
     // The stick clicks. In d-pad mode these are the two small grey dots in the middle
     // of each cluster; in joystick mode the left one is a tap on the stick itself, which

@@ -412,20 +412,6 @@ public:
         return m_supportsMetal3;
     }
 
-    // The compiled-pipeline store, or nullptr when unavailable. Owned here rather than
-    // by the pipeline compiler because a compiler object is created and destroyed once
-    // per pipeline - thousands of times per launch - and the archive has to outlive all
-    // of them and be shared between them.
-    class MetalBinaryArchive* GetBinaryArchive() const
-    {
-        return m_binaryArchive;
-    }
-
-    void SetBinaryArchive(class MetalBinaryArchive* archive)
-    {
-        m_binaryArchive = archive;
-    }
-
     bool SupportsMeshShaders() const
     {
         return m_supportsMeshShaders;
@@ -537,8 +523,6 @@ private:
 	bool m_supportsMeshShaders;
 	uint32 m_recommendedMaxVRAMUsage;
 	MetalPixelFormatSupport m_pixelFormatSupport;
-
-	class MetalBinaryArchive* m_binaryArchive{nullptr};
 
 	// Draws thrown away because this GPU has no mesh shaders. Counted, not merely
 	// skipped: without mesh shaders every geometry-shader and RECTS draw returns

@@ -197,23 +197,5 @@ void IOSInput_SetStickAxis(int stick, float x, float y);
 // (backgrounding, an incoming call, a view torn out from under a finger) does not always
 // produce one - and a button left down is a title stuck walking into a wall with nothing
 // on screen touching it. Same thread-safety terms as above.
-// The device's own touchscreen, standing in for the GamePad's.
-//
-// Coordinates are normalised 0..1 across the GAMEPAD SURFACE, not the device screen -
-// the caller is responsible for mapping from its view's bounds, because only it knows
-// where the pad screen is being drawn. Passing screen-relative coordinates would put
-// every touch in the wrong place whenever the pad is not fullscreen.
-//
-// The Wii U GamePad's touchscreen is resistive and single-touch: it reports one point.
-// Do not try to model multi-touch here; the guest has no way to receive it.
-//
-// touched=false releases, and deliberately leaves the last coordinates intact - some
-// titles read x/y after the touch goes off and expect them to still be there.
-void IOSInput_SetTouch(bool touched, float x, float y);
-
-// Reads the override back. Returns false when nothing is touching, in which case the
-// outputs are untouched. Called from the emulated title's thread once per VPADRead.
-bool IOSInput_GetTouch(float& xOut, float& yOut);
-
 void IOSInput_ReleaseAllButtons();
 #endif // CEMU_PLATFORM_IOS

@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 import Dispatch
 
 /// The on-screen pad.
@@ -54,26 +53,6 @@ struct OptimizedControlPanel: View {
     // which control scheme is on.
     @AppStorage(ControllerLayoutSettings.joystickKey)
     private var joystickMode = ControllerLayoutSettings.defaultJoystick
-    @AppStorage(ControllerLayoutSettings.showTriggersKey)
-    private var showTriggers = ControllerLayoutSettings.defaultShowTriggers
-    @AppStorage(ControllerLayoutSettings.showHomeKey)
-    private var showHome = ControllerLayoutSettings.defaultShowHome
-
-    /// Drops the controls the user has switched off.
-    ///
-    /// Filtered here rather than in ControllerGeometry so the layout stays a single
-    /// description of where things are on a real GamePad, and what is DRAWN stays a
-    /// separate question. A hidden control also stops hit-testing, because a button you
-    /// cannot see that still eats touches is worse than one you can.
-    private func visible(_ controls: [ControllerGeometry.Control]) -> [ControllerGeometry.Control] {
-        controls.filter { control in
-            switch control.id {
-            case "ZL", "ZR": return showTriggers
-            case "HOME": return showHome
-            default: return true
-            }
-        }
-    }
 
     var body: some View {
         // The automatic half of "adjustable + automatic sizing": GeometryReader re-runs
@@ -89,9 +68,9 @@ struct OptimizedControlPanel: View {
                     // The only difference between the two schemes. The right cluster,
                     // both anchors and every offset are shared, so switching modes
                     // swaps the d-pad for a stick and disturbs nothing else.
-                    controls: visible(joystickMode
+                    controls: joystickMode
                         ? ControllerGeometry.leftClusterJoystick
-                        : ControllerGeometry.leftCluster),
+                        : ControllerGeometry.leftCluster,
                     edge: .leading,
                     skin: skin,
                     unit: unit,
@@ -104,7 +83,7 @@ struct OptimizedControlPanel: View {
                 )
 
                 ControlCluster(
-                    controls: visible(ControllerGeometry.rightCluster),
+                    controls: ControllerGeometry.rightCluster,
                     edge: .trailing,
                     skin: skin,
                     unit: unit,
@@ -295,9 +274,6 @@ private struct ControlCluster: View {
 
 /// One control, drawn and held.
 private struct ControlButton: View {
-    @AppStorage(ControllerLayoutSettings.startSelectLabelsKey)
-    private var showStartSelectLabels = ControllerLayoutSettings.defaultStartSelectLabels
-
     let control: ControllerGeometry.Control
     let skin: WiiUControllerSkin
     let unit: CGFloat
@@ -323,19 +299,6 @@ private struct ControlButton: View {
             .frame(width: size.width, height: size.height)
             .scaleEffect(isPressed ? 0.94 : 1.0)
             .animation(.easeInOut(duration: 0.05), value: isPressed)
-            // START under +, SELECT under -, as the console prints them. An overlay
-            // rather than a VStack so the word cannot change the button's own size or
-            // shift it off the position the layout put it at - it is a label on the pad,
-            // not part of the control.
-            .overlay(alignment: .bottom) {
-                if showStartSelectLabels, let subLabel = control.subLabel {
-                    Text(subLabel)
-                        .font(.system(size: max(size.height * 0.30, 7), weight: .semibold, design: .rounded))
-                        .foregroundColor(labelColor.opacity(0.85))
-                        .fixedSize()
-                        .offset(y: size.height * 0.62)
-                }
-            }
         }
         .allowsHitTesting(isInteractive)
     }
@@ -383,31 +346,13 @@ private struct ControlButton: View {
         }
     }
 
-    /// Chosen against the button it is drawn on, not fixed.
-    ///
-    /// It used to return white for every d-pad and face button, which was fine while
-    /// every skin coloured them darkly. The Wii U Original skin is now what the console
-    /// actually is - white buttons with dark grey letters - and white-on-white is not a
-    /// label. Any future skin with a pale button would have hit the same thing.
     private var labelColor: Color {
         switch control.style {
         case .dpad, .face:
-            return Self.isLight(fillColor) ? Self.darkLabel : .white
+            return .white
         case .shoulder, .system, .stick, .joystick:
             return Self.neutralLabel
         }
-    }
-
-    /// The letters on a white Wii U GamePad are dark grey, not black.
-    private static let darkLabel = Color(red: 0.24, green: 0.24, blue: 0.26)
-
-    /// Perceived brightness, so the choice follows what an eye sees rather than the raw
-    /// average - green reads far brighter than blue at the same value, which is exactly
-    /// the case that would otherwise put white text on a yellow button.
-    private static func isLight(_ color: Color) -> Bool {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
-        return (0.299 * r + 0.587 * g + 0.114 * b) > 0.6
     }
 
     private var fontSize: CGFloat {
@@ -569,16 +514,7 @@ private struct JoystickControl: View {
     /// centre of the left cluster; R3 still has its own, in the middle of A/B/X/Y, so a
     /// tap on the camera stick has nothing to mean and is better off meaning nothing than
     /// firing a second control that is already on screen.
-    private var clickButton: String? {
-        switch control.id {
-        case "stickL": return "L3"
-        case "stickR": return "R3"
-        default: return nil
-        }
-    }
-
-    /// The pending hold-to-click, cancelled the moment the thumb moves or lifts.
-    @State private var holdClick: DispatchWorkItem?
+    private var clickButton: String? { control.id == "stickL" ? "L3" : nil }
 
     /// The settings, held to their declared ranges. UserDefaults is writable by anything
     /// on the device and survives a downgrade, so a value from outside the range the
@@ -678,29 +614,15 @@ private struct JoystickControl: View {
                     // every press of the stick would count as a push and L3 would become
                     // unreachable at the setting people who want precision will pick.
                     if deflection > ControllerGeometry.stickClickThreshold {
-                        // Steering, not clicking. Cancel any pending hold - a thumb that
-                        // is moving the stick is not pressing it in.
                         pushed = true
-                        holdClick?.cancel()
-                        holdClick = nil
-                    } else if holdClick == nil && !pushed {
-                        // Rest the thumb on the stick and it clicks in, the way pushing
-                        // straight down does on the console. A touchscreen has no
-                        // pressure axis, so the gesture is borrowed from time instead.
-                        let work = DispatchWorkItem { click() }
-                        holdClick = work
-                        DispatchQueue.main.asyncAfter(
-                            deadline: .now() + ControllerGeometry.stickClickHoldSeconds,
-                            execute: work)
                     }
                     report(deflection: deflection, dx: dx, dy: dy, distance: distance)
                 }
                 .onEnded { _ in
-                    // Lifting before the hold completes cancels it. A stick you touched
-                    // and let go of has not been clicked - if it had, every brush of the
-                    // thumb would fire L3.
-                    holdClick?.cancel()
-                    holdClick = nil
+                    // A press that never deflected the stick is the click. It is the one
+                    // gesture a stick has spare, and L3 would otherwise be lost in this
+                    // mode - the centre dot it used to live on is where the knob is now.
+                    if !pushed { click() }
                     recentre()
                 }
         )
@@ -709,8 +631,6 @@ private struct JoystickControl: View {
         // worse than a stuck button: the title keeps walking and nothing on screen is lit
         // up to explain why.
         .onDisappear {
-            holdClick?.cancel()
-            holdClick = nil
             clickRelease?.cancel()
             clickRelease = nil
             if let clickButton { onInput(clickButton, false) }

@@ -91,56 +91,6 @@ final class DisplayRouter {
     private var observing = false
     private var tvSurfaceRegistered = false
 
-    /// Which of the two Wii U screens this device is showing.
-    ///
-    /// Only meaningful while the TV screen is on the device - `deviceOnly` and
-    /// `deviceMirrored`. In `dualScreen` the device already shows the GamePad and the TV
-    /// is on the external display, so there is nothing to swap.
-    ///
-    /// A great many Wii U titles are unplayable without the GamePad screen, not merely
-    /// less convenient: Wind Waker and Twilight Princess keep the map and inventory
-    /// there, Nintendo Land and Game & Wario build whole modes around it, and Splatoon
-    /// puts the map you jump from on it. Until now the engine was simply never asked to
-    /// produce that screen on a single-display device.
-    enum DeviceScreen {
-        case tv
-        case gamepad
-    }
-
-    private(set) var deviceScreen: DeviceScreen = .tv
-
-    /// Swaps which screen the device shows. Fast on purpose - the title is not touched,
-    /// no surface is torn down and rebuilt, and both screens stay registered with the
-    /// renderer. All that changes is which view is in front.
-    func setDeviceScreen(_ screen: DeviceScreen) {
-        guard deviceScreen != screen else { return }
-        deviceScreen = screen
-        // Create the pad surface if this is the first time it has been asked for. Never
-        // destroys one - see syncPadSurface.
-        syncPadSurface()
-        applyDeviceScreenVisibility()
-        log(screen == .tv
-            ? "showing the Wii U TV screen on this device"
-            : "showing the Wii U GamePad screen on this device")
-    }
-
-    /// Shows one of the two surfaces and hides the other. Deliberately NOT applyPlacement:
-    /// that recomputes the whole display arrangement and reparents the TV view, which is
-    /// far more than a screen swap needs and was part of what made repeated swapping
-    /// destroy the UI.
-    private func applyDeviceScreenVisibility() {
-        guard placement != .dualScreen, let container = deviceContainer else { return }
-        if deviceScreen == .gamepad, let pad = padRenderView, pad.superview === container {
-            pad.isHidden = false
-            container.bringSubviewToFront(pad)
-        } else {
-            padRenderView?.isHidden = true
-            if tvRenderViewStorage?.superview === container {
-                container.bringSubviewToFront(tvRenderView)
-            }
-        }
-    }
-
     private init() {}
 
     // MARK: - Lifecycle
@@ -227,18 +177,11 @@ final class DisplayRouter {
     func titleStopped() {
         tvRenderViewStorage?.removeFromSuperview()
         tvRenderViewStorage = nil
-        // The only place the pad surface is released, now that swapping screens does not.
-        if cemu_bridge_has_pad_render_surface() {
-            cemu_bridge_release_pad_render_surface()
-        }
         padRenderView?.removeFromSuperview()
         padRenderView = nil
         externalWindow?.isHidden = true
         externalWindow = nil
         tvSurfaceRegistered = false
-        // Back to the TV screen for the next launch. Leaving it on the GamePad would
-        // start the next title showing a screen that title may never draw to.
-        deviceScreen = .tv
         log("title stopped; render surfaces will be rebuilt on the next launch")
     }
 
@@ -282,11 +225,6 @@ final class DisplayRouter {
         }
 
         syncPadSurface()
-
-        // A display arrangement change can reparent the TV view, so re-assert which of the
-        // two screens is in front afterwards. Same helper the swap button uses - one
-        // definition, so the two paths cannot drift into disagreeing about z-order.
-        applyDeviceScreenVisibility()
 
         if changed || !tvSurfaceRegistered {
             switch desired {
@@ -359,9 +297,7 @@ final class DisplayRouter {
     /// the GPU thread — see `cemu_bridge_release_pad_render_surface`.
     private func syncPadSurface() {
         guard tvSurfaceRegistered else { return }
-        // Either the GamePad has an external-display arrangement to live in, or the user
-        // has asked this device to show it instead of the TV screen.
-        let wantPad = (placement == .dualScreen) || (deviceScreen == .gamepad)
+        let wantPad = (placement == .dualScreen)
         let havePad = cemu_bridge_has_pad_render_surface()
 
         if wantPad, !havePad, let container = deviceContainer {
@@ -382,23 +318,9 @@ final class DisplayRouter {
             let scale = (container.window?.screen ?? UIScreen.main).effectiveRenderScale
             cemu_bridge_register_pad_render_surface(surface, Int32(size.width), Int32(size.height), scale)
         } else if !wantPad, havePad {
-            // HIDDEN, NOT RELEASED. This used to release the surface, and that is what
-            // broke the UI when swapping screens repeatedly.
-            //
-            // cemu_bridge_release_pad_render_surface() drops the C++ side's retain and
-            // deliberately leaves the dead CAMetalLayer as a sublayer of this view - the
-            // renderer holds a bare pointer into it from the GPU thread and the layer has
-            // to outlive that. The documented cost is "one small view per connect/
-            // disconnect cycle", which is fine for plugging a display in and out and
-            // ruinous for a button somebody taps to look at their map: every tap left
-            // another dead Metal layer stacked in the container and built a fresh one on
-            // the way back.
-            //
-            // So the surface now lives for the title. It keeps rendering while hidden,
-            // which costs GPU time for a screen nobody is looking at - a real cost, and
-            // the right trade against a UI that falls apart after three taps. The release
-            // still happens, once, in titleStopped().
+            cemu_bridge_release_pad_render_surface()
             padRenderView?.isHidden = true
+            padRenderView = nil
         }
     }
 

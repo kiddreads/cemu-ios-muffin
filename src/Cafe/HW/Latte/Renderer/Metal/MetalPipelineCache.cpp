@@ -1,6 +1,4 @@
 #include "Cafe/HW/Latte/Renderer/Metal/MetalPipelineCache.h"
-#include "Cafe/HW/Latte/Renderer/Metal/MetalBinaryArchive.h"
-#include "Cafe/CafeSystem.h"
 #include "Cafe/HW/Latte/Renderer/Metal/MetalRenderer.h"
 #include "Cafe/HW/Latte/Renderer/Metal/LatteToMtl.h"
 #include "Cafe/HW/Latte/Renderer/Metal/MetalPipelineCompiler.h"
@@ -117,30 +115,11 @@ MetalPipelineCache::~MetalPipelineCache()
 PipelineObject* MetalPipelineCache::GetRenderPipelineState(const LatteFetchShader* fetchShader, const LatteDecompilerShader* vertexShader, const LatteDecompilerShader* geometryShader, const LatteDecompilerShader* pixelShader, const MetalAttachmentsInfo& lastUsedAttachmentsInfo, const MetalAttachmentsInfo& activeAttachmentsInfo, Vector2i extend, uint32 indexCount, const LatteContextRegister& lcr)
 {
     uint64 hash = CalculatePipelineHash(fetchShader, vertexShader, geometryShader, pixelShader, lastUsedAttachmentsInfo, activeAttachmentsInfo, lcr);
+    PipelineObject*& pipelineObj = m_pipelineCache[hash];
+    if (pipelineObj)
+        return pipelineObj;
 
-    // Under the lock, and note this was an INSERT rather than a lookup: `m_pipelineCache[hash]`
-    // default-constructs an entry when the key is absent, so this function mutated the map
-    // every time it missed. Meanwhile LoadPipelineFromCache writes the same std::map from N
-    // compiler threads while holding m_pipelineCacheLock. Concurrent mutation of a std::map
-    // is a data race whatever the values are; the window is narrow but real, and it is the
-    // load-time compiler threads racing the Latte thread's first draws.
-    //
-    // The lock is released before compiling. Compilation is synchronous and takes hundreds
-    // of milliseconds, and FSpinlock would have a core busy-waiting for all of it.
-    // Publishing the PipelineObject before its m_pipeline is filled in is already the
-    // contract the async path relies on - the draw site checks `if (!pipelineObj->m_pipeline)`
-    // and skips - so this changes nothing about that.
-    m_pipelineCacheLock.lock();
-    auto pipelineIt = m_pipelineCache.find(hash);
-    if (pipelineIt != m_pipelineCache.end())
-    {
-        PipelineObject* existing = pipelineIt->second;
-        m_pipelineCacheLock.unlock();
-        return existing;
-    }
-    PipelineObject* pipelineObj = new PipelineObject();
-    m_pipelineCache[hash] = pipelineObj;
-    m_pipelineCacheLock.unlock();
+    pipelineObj = new PipelineObject();
 
     MetalPipelineCompiler* compiler = new MetalPipelineCompiler(m_mtlr, *pipelineObj);
     compiler->InitFromState(fetchShader, vertexShader, geometryShader, pixelShader, lastUsedAttachmentsInfo, activeAttachmentsInfo, lcr);
@@ -286,15 +265,6 @@ uint32 MetalPipelineCache::BeginLoading(uint64 cacheTitleId)
 {
 	std::error_code ec;
 	fs::create_directories(ActiveSettings::GetCachePath("shaderCache/transferable"), ec);
-
-	// Open the compiled-pipeline archive next to the recipe cache. It shadows this cache
-	// rather than replacing it: the recipes are still what says WHICH pipelines a title
-	// needs, and the archive is what stops each of them being compiled from scratch again.
-	if (!m_mtlr->GetBinaryArchive())
-	{
-		m_mtlr->SetBinaryArchive(MetalBinaryArchive::OpenOrCreate(
-			m_mtlr, cacheTitleId, CafeSystem::GetForegroundTitleVersion()));
-	}
 	const auto pathCacheFile = ActiveSettings::GetCachePath("shaderCache/transferable/{:016x}_mtlpipeline.bin", cacheTitleId);
 
 	// init cache loader state
@@ -378,36 +348,14 @@ void MetalPipelineCache::EndLoading()
 		m_compilationQueue.push({}); // push empty workload for every thread. Threads then will shutdown after checking for m_numCompilationThreads == 0
 	}
 	// keep cache file open for writing of new pipelines
-
-	// The most valuable write of the run. Everything the loading screen just compiled is
-	// in the archive now, so this is what makes the NEXT launch of this title cheap. A
-	// crash after this point costs nothing; a crash before it would have thrown the whole
-	// loading screen's work away.
-	if (auto* archive = m_mtlr->GetBinaryArchive())
-		archive->SerializeIfDirty(1);
 }
 
 void MetalPipelineCache::Close()
 {
-    // Anything compiled during play, after the loading screen finished, is written here.
-    if (auto* archive = m_mtlr->GetBinaryArchive())
+    if(s_cache)
     {
-        archive->SerializeIfDirty(0);
-        archive->LogSummary();
-        m_mtlr->SetBinaryArchive(nullptr);
-        delete archive;
-    }
-
-    // Under the lock, because WorkerThread reads s_cache and calls AddFileAsync on it
-    // while this deletes it - a use-after-free at title exit that was already there and
-    // becomes much easier to hit now that this function does more work before it.
-    {
-        std::scoped_lock lock(m_fileCacheMutex);
-        if (s_cache)
-        {
-            delete s_cache;
-            s_cache = nullptr;
-        }
+        delete s_cache;
+        s_cache = nullptr;
     }
 }
 

@@ -2,17 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- UIFileSharingEnabled lives HERE, not as INFOPLIST_KEY_UIFileSharingEnabled in
-	     project.yml, because Xcode's generated-Info.plist only understands a fixed set
-	     of INFOPLIST_KEY_ names and this is not one of them. The setting was present in
-	     project.yml and silently discarded: the v1.38 IPA shipped with
-	     LSSupportsOpeningDocumentsInPlace (which IS on that list) and no
-	     UIFileSharingEnabled at all. Without it the app's Documents folder never appears
-	     in the Files app, so there is no way to get keys.txt in or a log out - which is
-	     exactly what Brandon reported after installing through SideStore.
-	     Verified by reading the key list straight out of the shipped Payload/Cemu.app. -->
-	<key>UIFileSharingEnabled</key>
-	<true/>
 	<key>CFBundleIcons</key>
 	<dict>
 		<key>CFBundleAlternateIcons</key>

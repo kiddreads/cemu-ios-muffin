@@ -1,6 +1,5 @@
 #include "Cafe/HW/Latte/Renderer/Metal/MetalCommon.h"
 #include "Cafe/HW/Latte/Renderer/Metal/MetalPipelineCompiler.h"
-#include "Cafe/HW/Latte/Renderer/Metal/MetalBinaryArchive.h"
 #include "Cafe/HW/Latte/Renderer/Metal/MetalRenderer.h"
 #include "Cafe/HW/Latte/Renderer/Metal/CachedFBOMtl.h"
 #include "Cafe/HW/Latte/Renderer/Metal/LatteToMtl.h"
@@ -266,13 +265,24 @@ void SetFragmentState(T* desc, const MetalAttachmentsInfo& lastUsedAttachmentsIn
 
 MetalPipelineCompiler::~MetalPipelineCompiler()
 {
-    // The commented-out binary-archive block that used to live here is gone. It
-    // referenced m_binaryArchive and m_binaryArchiveURL, neither of which was ever
-    // declared anywhere, so it could not have compiled if uncommented - it read as a
-    // half-finished feature and was really an invitation to a dead end. The archive is
-    // implemented for real now in MetalBinaryArchive, owned by MetalRenderer rather than
-    // by a per-pipeline compiler object that is constructed and destroyed thousands of
-    // times per launch.
+    /*
+    for (auto& pair : m_pipelineCache)
+    {
+        pair.second->release();
+    }
+    m_pipelineCache.clear();
+
+    NS::Error* error = nullptr;
+    m_binaryArchive->serializeToURL(m_binaryArchiveURL, &error);
+    if (error)
+    {
+        cemuLog_log(LogType::Force, "error serializing binary archive: {}", error->localizedDescription()->utf8String());
+        error->release();
+    }
+    m_binaryArchive->release();
+
+    m_binaryArchiveURL->release();
+    */
     if (m_pipelineDescriptor)
         m_pipelineDescriptor->release();
 }
@@ -360,47 +370,7 @@ bool MetalPipelineCompiler::Compile(bool forceCompile, bool isRenderThread, bool
 #ifdef CEMU_DEBUG_ASSERT
         desc->setLabel(GetLabel("Render pipeline state", desc));
 #endif
-        // Ask the archive first. This is the whole point of the feature: on a second
-        // launch of the same title on the same device, the pipeline was already compiled
-        // and is sitting on disk, and the lookup pass skips the back-end compile
-        // entirely.
-        //
-        // Only the classic render path. The mesh path above is deliberately left alone:
-        // metal-cpp exposes no addMeshRenderPipelineFunctions, so a mesh pipeline could
-        // be looked up but never stored, and an archive you can only ever miss in is
-        // worth less than the branch it costs. Mesh pipelines also only exist on Metal3
-        // devices, which is not the hardware this most needs to help.
-        MetalBinaryArchive* archive = m_mtlr->GetBinaryArchive();
-        if (archive)
-        {
-            archive->AttachTo(desc);
-            pipeline = m_mtlr->GetDevice()->newRenderPipelineState(desc, MTL::PipelineOptionFailOnBinaryArchiveMiss, nullptr, &error);
-            if (pipeline)
-            {
-                archive->NoteHit();
-            }
-            else
-            {
-                // A miss and a genuine compile error are not distinguished here on
-                // purpose. Branching on specific MTLBinaryArchiveDomain error codes would
-                // depend on the least stable part of this API, and the real compile below
-                // answers the question definitively either way - a broken shader simply
-                // fails twice and reports on the second.
-                if (error)
-                {
-                    error->release();
-                    error = nullptr;
-                }
-                archive->NoteMiss();
-                pipeline = m_mtlr->GetDevice()->newRenderPipelineState(desc, MTL::PipelineOptionNone, nullptr, &error);
-                if (pipeline && !error)
-                    archive->Add(desc);
-            }
-        }
-        else
-        {
-       	    pipeline = m_mtlr->GetDevice()->newRenderPipelineState(desc, MTL::PipelineOptionNone, nullptr, &error);
-        }
+       	pipeline = m_mtlr->GetDevice()->newRenderPipelineState(desc, MTL::PipelineOptionNone, nullptr, &error);
     }
     auto end = std::chrono::high_resolution_clock::now();
 
