@@ -11,6 +11,11 @@ private extension Bundle {
 }
 
 struct SettingsView: View {
+    /// The skin the pad is currently wearing, so the preview below shows what the user
+    /// will actually see rather than whichever skin this file happened to default to.
+    /// Passed in because the selection lives in ContentView's state, not in UserDefaults.
+    var skin: WiiUControllerSkin = WiiUControllerSkin.standard
+
     @ObservedObject var gameManager: GameManager
     @Environment(\.dismiss) private var dismiss
     @State private var showingIconPicker = false
@@ -91,6 +96,12 @@ struct SettingsView: View {
                     }
 
                     Section {
+                        // Shown above the toggles rather than below them, because every
+                        // control in this section changes what it looks like and the
+                        // answer should be visible while you are deciding.
+                        ControllerPreview(skin: skin)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+
                         Toggle(isOn: $showTriggers) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Show ZL and ZR")

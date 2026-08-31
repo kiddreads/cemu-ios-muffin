@@ -302,7 +302,7 @@ struct GameBrowserView: View {
             IconPickerView()
         }
         .sheet(isPresented: $showingSettings) {
-            SettingsView(gameManager: gameManager)
+            SettingsView(gameManager: gameManager, skin: selectedSkin)
         }
         // ONE importer. See ImportKind above for why two of them meant neither worked.
         // The allowed types are read at presentation time, so setting importKind and
