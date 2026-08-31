@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import Dispatch
 
 /// The on-screen pad.
@@ -382,13 +383,31 @@ private struct ControlButton: View {
         }
     }
 
+    /// Chosen against the button it is drawn on, not fixed.
+    ///
+    /// It used to return white for every d-pad and face button, which was fine while
+    /// every skin coloured them darkly. The Wii U Original skin is now what the console
+    /// actually is - white buttons with dark grey letters - and white-on-white is not a
+    /// label. Any future skin with a pale button would have hit the same thing.
     private var labelColor: Color {
         switch control.style {
         case .dpad, .face:
-            return .white
+            return Self.isLight(fillColor) ? Self.darkLabel : .white
         case .shoulder, .system, .stick, .joystick:
             return Self.neutralLabel
         }
+    }
+
+    /// The letters on a white Wii U GamePad are dark grey, not black.
+    private static let darkLabel = Color(red: 0.24, green: 0.24, blue: 0.26)
+
+    /// Perceived brightness, so the choice follows what an eye sees rather than the raw
+    /// average - green reads far brighter than blue at the same value, which is exactly
+    /// the case that would otherwise put white text on a yellow button.
+    private static func isLight(_ color: Color) -> Bool {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        return (0.299 * r + 0.587 * g + 0.114 * b) > 0.6
     }
 
     private var fontSize: CGFloat {

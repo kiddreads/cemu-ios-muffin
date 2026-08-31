@@ -180,16 +180,35 @@ enum ControllerGeometry {
         var subLabel: String? = nil
     }
 
-    // The cross is measurably wider than it is tall in the source (73.75 vs 68.75 px);
-    // that asymmetry is in the screenshot, so it is kept rather than tidied away.
-    private static let crossX: CGFloat = 1.240
-    private static let crossY: CGFloat = 1.155
+    // MEASURED off the Wii U GamePad reference photograph, not estimated from it. Blob
+    // centres, in image pixels, with a face button measuring 23.5px across - which is the
+    // unit everything below is expressed in:
+    //
+    //   face buttons  X(526,142) Y(502,165) A(548,165) B(525,189)  -> centre (525.5,165.5)
+    //   d-pad centre  (80,162), 55px across        left stick  (59,102), 50px across
+    //   right stick   (552,103)                    plus/minus  x=496, y=214 and ~240
+    //
+    // The previous numbers came from a phone screenshot of a different emulator and are
+    // wrong for this device in three ways: the face diamond is tighter than the d-pad
+    // rather than the same size, the sticks sit further outboard, and + and - are INBOARD
+    // of the face buttons, toward the screen - the old layout put them on the far side.
+    private static let crossX: CGFloat = 0.957
+    private static let crossY: CGFloat = 1.000
+    /// The d-pad is a physically larger cross than the face diamond - 55px against 47px
+    /// across on the reference - so it does not share the face buttons' spacing.
+    private static let dpadArm: CGFloat = 1.149
     /// How far above the d-pad / face diamond the analog stick sits, in button diameters.
     /// Taken from the reference photographs: on the console the stick centre is a little
     /// over two button-widths above the cross centre, and slightly outboard of it.
-    private static let stickAboveCross: CGFloat = 2.45
-    /// The column + and - stand in, outboard of the face diamond.
-    private static let systemColumnX: CGFloat = 1.85
+    /// Left stick relative to the d-pad centre, and right stick relative to the face
+    /// diamond centre. Measured separately because the console does not place them
+    /// symmetrically: (59,102) vs d-pad (80,162), and (552,103) vs faces (525.5,165.5).
+    private static let leftStickOffset = CGPoint(x: -0.894, y: -2.553)
+    private static let rightStickOffset = CGPoint(x: 1.128, y: -2.660)
+    /// The column + and - stand in. NEGATIVE - they are inboard of the face diamond, on
+    /// the screen side, which is where the reference puts them and the opposite of where
+    /// the previous layout had them.
+    private static let systemColumnX: CGFloat = -1.255
     /// Vertical gap between a shoulder bumper and the trigger behind it.
     private static let triggerStackY: CGFloat = 1.05
     private static let shoulderY: CGFloat = -2.824
@@ -215,12 +234,12 @@ enum ControllerGeometry {
         // a d-pad all at once, and so does this - the previous layout offered a stick
         // only in place of the d-pad, which is a choice the hardware never asks you to
         // make. L3 is a press-and-hold on this stick; see stickClickHoldSeconds.
-        Control(id: "stickL", glyph: "", offset: CGPoint(x: -0.35, y: -stickAboveCross),
+        Control(id: "stickL", glyph: "", offset: leftStickOffset,
                 shape: .circle(stickBaseDiameter), style: .joystick),
-        Control(id: "up",    glyph: "\u{25B2}", offset: CGPoint(x: 0, y: -crossY), shape: button, style: .dpad),
-        Control(id: "left",  glyph: "\u{25C0}", offset: CGPoint(x: -crossX, y: 0), shape: button, style: .dpad),
-        Control(id: "right", glyph: "\u{25B6}", offset: CGPoint(x: crossX, y: 0),  shape: button, style: .dpad),
-        Control(id: "down",  glyph: "\u{25BC}", offset: CGPoint(x: 0, y: crossY),  shape: button, style: .dpad),
+        Control(id: "up",    glyph: "\u{25B2}", offset: CGPoint(x: 0, y: -dpadArm), shape: button, style: .dpad),
+        Control(id: "left",  glyph: "\u{25C0}", offset: CGPoint(x: -dpadArm, y: 0), shape: button, style: .dpad),
+        Control(id: "right", glyph: "\u{25B6}", offset: CGPoint(x: dpadArm, y: 0),  shape: button, style: .dpad),
+        Control(id: "down",  glyph: "\u{25BC}", offset: CGPoint(x: 0, y: dpadArm),  shape: button, style: .dpad),
         Control(id: "L",  glyph: "L",  offset: CGPoint(x: 0, y: shoulderY),  shape: shoulder, style: .shoulder),
         Control(id: "ZL", glyph: "ZL", offset: CGPoint(x: 0, y: shoulderY - triggerStackY), shape: shoulder, style: .shoulder)
     ]
@@ -252,7 +271,10 @@ enum ControllerGeometry {
     /// The stick's outer ring, in layout units: exactly as wide as the d-pad it replaces
     /// (2 x 1.240 + 1.0), so the cluster's bounds - and therefore the drag handle and the
     /// off-screen clamp derived from them - barely change between the two modes.
-    static let stickBaseDiameter: CGFloat = 2 * crossX + 1.0
+    /// 50px across on the reference against a 23.5px face button. The old value derived
+    /// the stick from the d-pad's width, which made it half again as large as the
+    /// console's.
+    static let stickBaseDiameter: CGFloat = 2.128
     /// The thumb cap. Close to a face button, so it reads as something you push around
     /// rather than a dot that happens to move.
     static let stickKnobDiameter: CGFloat = 1.15
@@ -378,15 +400,15 @@ enum ControllerGeometry {
     /// which is the transposition of the Xbox one and the single easiest thing to get
     /// wrong. Both + and - live here because that is where the console puts them.
     static let rightCluster: [Control] = [
-        Control(id: "stickR", glyph: "", offset: CGPoint(x: 0.35, y: -stickAboveCross),
+        Control(id: "stickR", glyph: "", offset: rightStickOffset,
                 shape: .circle(stickBaseDiameter), style: .joystick),
         Control(id: "X", glyph: "X", offset: CGPoint(x: 0, y: -crossY), shape: button, style: .face),
         Control(id: "Y", glyph: "Y", offset: CGPoint(x: -crossX, y: 0), shape: button, style: .face),
         Control(id: "A", glyph: "A", offset: CGPoint(x: crossX, y: 0),  shape: button, style: .face),
         Control(id: "B", glyph: "B", offset: CGPoint(x: 0, y: crossY),  shape: button, style: .face),
-        Control(id: "plus",  glyph: "\u{FF0B}", offset: CGPoint(x: systemColumnX, y: crossY + 0.25),
+        Control(id: "plus",  glyph: "\u{FF0B}", offset: CGPoint(x: systemColumnX, y: 2.064),
                 shape: system, style: .system, subLabel: "START"),
-        Control(id: "minus", glyph: "\u{2212}", offset: CGPoint(x: systemColumnX, y: crossY + 1.35),
+        Control(id: "minus", glyph: "\u{2212}", offset: CGPoint(x: systemColumnX, y: 3.170),
                 shape: system, style: .system, subLabel: "SELECT"),
         Control(id: "HOME", glyph: "\u{2302}", offset: CGPoint(x: 0, y: crossY + 1.6), shape: system, style: .system),
         Control(id: "R",  glyph: "R",  offset: CGPoint(x: 0, y: shoulderY),  shape: shoulder, style: .shoulder),

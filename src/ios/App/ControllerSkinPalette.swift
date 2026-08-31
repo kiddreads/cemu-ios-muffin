@@ -18,13 +18,25 @@ enum ControllerSkinPalette {
         static let background = Color(red: 0.15, green: 0.15, blue: 0.17)
     }
 
+    /// The actual Wii U GamePad, sampled from a photograph of one rather than remembered.
+    ///
+    /// It was green A, red B, blue X, yellow Y - a Super Nintendo palette wearing a Wii U
+    /// name. The console does not colour its face buttons at all: reading the four button
+    /// centres off the reference gives (255,255,255) for every one of them, on a body of
+    /// (241,241,243), with the letters in dark grey. That is the whole point of the Wii U
+    /// face buttons - they are uniform, and the letter is the only thing distinguishing
+    /// them.
+    ///
+    /// Anyone who wants coloured buttons still has six other skins; this one is the one
+    /// that claims to be the console, so it has to actually be the console.
     enum WiiUOriginal {
-        static let dpad = Color(red: 0.2, green: 0.2, blue: 0.2)
-        static let a = Color(red: 0.1, green: 0.7, blue: 0.2)
-        static let b = Color(red: 0.95, green: 0.2, blue: 0.1)
-        static let x = Color(red: 0.0, green: 0.3, blue: 0.95)
-        static let y = Color(red: 0.99, green: 0.75, blue: 0.0)
-        static let background = Color(red: 0.18, green: 0.18, blue: 0.19)
+        /// The d-pad is body-coloured on the white GamePad, not black.
+        static let dpad = Color(red: 0.88, green: 0.88, blue: 0.89)
+        static let a = Color(red: 1.0, green: 1.0, blue: 1.0)
+        static let b = Color(red: 1.0, green: 1.0, blue: 1.0)
+        static let x = Color(red: 1.0, green: 1.0, blue: 1.0)
+        static let y = Color(red: 1.0, green: 1.0, blue: 1.0)
+        static let background = Color(red: 0.945, green: 0.945, blue: 0.953)
     }
 
     enum GameCube {
