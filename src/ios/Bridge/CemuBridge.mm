@@ -362,7 +362,11 @@ extern "C" const char* cemu_bridge_device_report(void)
                  (unsigned long long)(avail / (1024ull * 1024ull)));
         g_deviceReport += buf;
     }
-    g_deviceReport += " | build " BUILD_VERSION_STRING;
+    // Two appends, not literal juxtaposition. BUILD_VERSION_STRING is a parenthesised
+    // expression - ("2" "." "0" ...) - not a bare string literal, so writing
+    // " | build " BUILD_VERSION_STRING parses as calling a char array.
+    g_deviceReport += " | build ";
+    g_deviceReport += BUILD_VERSION_STRING;
     return g_deviceReport.c_str();
 }
 
