@@ -65,6 +65,9 @@ struct SettingsView: View {
     private var showHome = ControllerLayoutSettings.defaultShowHome
     @AppStorage(ControllerLayoutSettings.startSelectLabelsKey)
     private var startSelectLabels = ControllerLayoutSettings.defaultStartSelectLabels
+    /// On by default. Mirrored into the engine on change and at appear, because the
+    /// engine reads it once when a title opens its cache and cannot see UserDefaults.
+    @AppStorage("muffin.pipelineCacheEnabled") private var pipelineCacheEnabled = true
     @AppStorage(ControllerLayoutSettings.deadzoneKey)
     private var stickDeadzone = ControllerLayoutSettings.defaultDeadzone
     @AppStorage(ControllerLayoutSettings.stickCurveKey)
@@ -328,6 +331,29 @@ struct SettingsView: View {
                         Text("This device")
                     } footer: {
                         Text("Send this with any bug report. It says which chip, how much memory, and which build - which is what makes everything else in a log mean something.")
+                    }
+                    .foregroundColor(MuffinTheme.brownDarkest)
+
+                    // Kept next to the launch log rather than with the control toggles:
+                    // both are about what the emulator does rather than how it looks, and
+                    // this is the one somebody turns off when a build misbehaves.
+                    Section {
+                        Toggle(isOn: $pipelineCacheEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Keep compiled shaders between launches")
+                                Text("Without this, every launch re-translates the game's shaders and rebuilds every GPU pipeline from scratch - which is what the loading screen is. With it, that work is done once per game on this device.")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .tint(MuffinTheme.pixelBlue)
+                        .onChange(of: pipelineCacheEnabled) { newValue in
+                            cemu_bridge_set_pipeline_cache_enabled(newValue)
+                        }
+                    } header: {
+                        Text("Performance")
+                    } footer: {
+                        Text("It cannot compile shaders a game has never run - the Wii U only reveals them as it draws. What it removes is doing the same work again on every launch.")
                     }
                     .foregroundColor(MuffinTheme.brownDarkest)
 

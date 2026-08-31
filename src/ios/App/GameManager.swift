@@ -478,6 +478,13 @@ class GameManager: ObservableObject {
             // default that was chosen with the CPU mode in hand.
             TimebaseScale.applyStoredChoiceIfAny()
 
+            // The engine reads this once, when the title opens its pipeline cache, and
+            // cannot see UserDefaults. Applied here rather than only from the Settings
+            // toggle so the choice survives a relaunch - a switch that silently reverts
+            // every time the app restarts is worse than no switch.
+            cemu_bridge_set_pipeline_cache_enabled(
+                UserDefaults.standard.object(forKey: "muffin.pipelineCacheEnabled") as? Bool ?? true)
+
             cemu_bridge_log_checkpoint("launchGame: about to call engine.boot() [background]")
             let status = EmulationEngine.bootBlocking(path: romPath)
             cemu_bridge_log_checkpoint("launchGame: engine.boot() returned [background]")
