@@ -512,7 +512,7 @@ void cemu_bridge_start_memory_watchdog(void) {
 
     // Defined in src/gui/iosgui/IOSTitleConvert.cpp.
     int  IOSTitleConvert_Start(const char* sourcePath, const char* outputPath, int asFolder);
-    void IOSTitleConvert_Poll(struct IOSConvertProgress* out);
+    void IOSTitleConvert_Poll(IOSConvertProgress* out);
     void IOSTitleConvert_Cancel(void);
     int  IOSTitleConvert_Result(char* errBuf, int errBufLen);
     void IOSInput_ReleaseAllButtons();

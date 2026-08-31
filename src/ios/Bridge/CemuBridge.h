@@ -375,7 +375,7 @@ void cemu_bridge_set_button_state(CemuBridgeButton button, bool pressed);
 //
 // Runs on its own 16 MB-stack thread. One at a time: it is disk-bound and the device has
 // one disk. Start returns 0 if another is already running.
-typedef struct {
+typedef struct IOSConvertProgress {
     int stage;                              // mirrors WuaWriter::Stage
     unsigned int totalFileCount;
     unsigned int currentFileIndex;
