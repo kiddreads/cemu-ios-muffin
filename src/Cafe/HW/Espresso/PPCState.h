@@ -226,6 +226,10 @@ void PPCTimer_init();
 void PPCTimer_waitForInit();
 uint64 PPCTimer_getFromRDTSC();
 
+// Told when the emulated clock rate changes, so the timebase can carry its current value
+// into a new anchor instead of jumping. No-op where the timebase is not anchor-based.
+void PPCTimer_onTimerShiftFactorChanged();
+
 uint64 PPCTimer_microsecondsToTsc(uint64 us);
 uint64 PPCTimer_tscToMicroseconds(uint64 us);
 uint64 PPCTimer_getRawTsc();

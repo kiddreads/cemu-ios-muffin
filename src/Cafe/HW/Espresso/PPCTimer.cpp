@@ -3,6 +3,10 @@
 #include "util/helpers/fspinlock.h"
 #include "util/highresolutiontimer/HighResolutionTimer.h"
 #include "Common/cpu_features.h"
+#include "Cemu/Logging/CemuLogging.h"
+
+#include <atomic>
+#include <vector>
 
 #if defined(ARCH_X86_64)
 #include <immintrin.h>
@@ -30,6 +34,12 @@ uint64 muldiv64(uint64 a, uint64 b, uint64 d)
 	uint64 modb = b % d;
 	return diva * b + moda * divb + moda * modb / d;
 }
+
+#if defined(__aarch64__)
+// Defined further down, next to the rest of the lock-free timebase; declared here
+// because PPCTimer_init() and PPCTimer_start() above it both publish an anchor.
+static void PPCTimer_republishAnchor(bool resetToZero);
+#endif
 
 uint64 PPCTimer_estimateRDTSCFrequency()
 {
@@ -77,9 +87,22 @@ int PPCTimer_initThread()
 
 void PPCTimer_init()
 {
+#if defined(__aarch64__)
+	// cntfrq_el0 IS the counter frequency, exactly, so there is nothing to estimate.
+	// That also removes the detached thread that spent three seconds measuring it and
+	// the PPCTimer_waitForInit() poll that waited on the result - three seconds of boot,
+	// and a window during which PPCTimer_isReady() reported false.
+	uint64 f;
+	asm volatile("mrs %0, cntfrq_el0" : "=r"(f));
+	_rdtscFrequency = f;
+	_rdtscLastMeasure = __rdtsc();
+	PPCTimer_republishAnchor(true);
+	cemuLog_log(LogType::Force, "Emulated timebase: counter at {} Hz, read lock-free", f);
+#else
 	std::thread t(PPCTimer_initThread);
 	t.detach();
 	_rdtscLastMeasure = __rdtsc();
+#endif
 }
 
 uint64 _tickSummary = 0;
@@ -88,6 +111,10 @@ void PPCTimer_start()
 {
 	_rdtscLastMeasure = __rdtsc();
 	_tickSummary = 0;
+#if defined(__aarch64__)
+	// Rebase to zero for the new title, which is what _tickSummary = 0 does above.
+	PPCTimer_republishAnchor(true);
+#endif
 }
 
 uint64 PPCTimer_getRawTsc()
@@ -122,6 +149,126 @@ void PPCTimer_waitForInit()
 }
 
 FSpinlock sTimerSpinlock;
+
+#if defined(__aarch64__)
+
+// The guest timebase, lock-free.
+//
+// WHAT WAS WRONG
+//
+// Every read took a global spinlock, issued a full memory fence, did a 128-bit multiply
+// into a shared accumulator, and then divided that accumulator by the counter frequency.
+// On arm64 that division is _udiv128, which has no instruction - it lowers to a call to
+// __udivti3, a software divide - and the spinlock's backoff is _mm_pause, which is
+// `isb sy`, a full instruction-synchronisation barrier.
+//
+// The contention is the worse half. This is reached from every guest mftb, from
+// OSGetSystemTime and OSGetTime and their siblings, from __OSLoadThread once per
+// timeslice per core, from coreinit's spinlocks and message queues, from GX2 - and from
+// the Latte GPU thread. So three interpreter threads and the GPU thread serialise on one
+// lock to run a software division, several hundred cycles at a time, on a path that a
+// title polling the clock hits constantly.
+//
+// WHY IT CAN SIMPLY BE DELETED HERE
+//
+// The accumulator exists for x86 reasons. There, __rdtsc is not architecturally
+// invariant and the frequency is ESTIMATED at runtime over three seconds, so the
+// remainder has to be carried to stop the error compounding, and monotonicity has to be
+// enforced by hand. On arm64 the counter is cntvct_el0: architecturally monotonic,
+// uniform across cores, and its exact frequency is readable from cntfrq_el0. Nothing has
+// to be estimated, so nothing has to be corrected.
+//
+// The tick therefore becomes a pure function of the counter and an immutable anchor,
+// which is what makes it lock-free: readers only ever read.
+//
+// THE DIVISION BECOMES A MULTIPLY
+//
+// tick = counterDelta * CORE_CLOCK / cntfrq. With cntfrq known and fixed, the reciprocal
+// is precomputed once as a 64.64 fixed-point multiplier and the runtime operation is a
+// 128-bit multiply taking the high half - one umulh. Error is under one tick per read
+// and, crucially, is computed from the anchor rather than accumulated, so it cannot
+// drift no matter how long a title runs.
+struct TimebaseAnchor
+{
+	uint64 cntAtAnchor;   // counter value when this anchor was published
+	uint64 tickAtAnchor;  // guest tick at that moment
+	uint64 mulFixed;      // CORE_CLOCK / cntfrq, as 64.64 fixed point
+	uint8 shift;          // ActiveSettings timer shift in force
+};
+
+static std::atomic<TimebaseAnchor*> s_timebaseAnchor{nullptr};
+// Retired anchors. A reader may still be holding one when it is replaced, and these are
+// 32 bytes and replaced a handful of times in a run (a title start, a speed change), so
+// they are kept rather than freed. That is a bounded leak by design, not an oversight -
+// reclaiming them safely would mean hazard pointers for no benefit.
+static std::vector<TimebaseAnchor*> s_retiredAnchors;
+static FSpinlock s_anchorWriteLock;
+
+static uint64 PPCTimer_armCounterFrequency()
+{
+	uint64 f;
+	asm volatile("mrs %0, cntfrq_el0" : "=r"(f));
+	return f;
+}
+
+static inline uint64 PPCTimer_mulHigh(uint64 a, uint64 b)
+{
+	return (uint64)(((unsigned __int128)a * (unsigned __int128)b) >> 64);
+}
+
+// Publishes a new anchor that continues from wherever the current one had reached, so the
+// timebase is continuous across a rebase or a speed change and can never jump or go
+// backwards. Writers are rare; readers never block.
+static void PPCTimer_republishAnchor(bool resetToZero)
+{
+	s_anchorWriteLock.lock();
+
+	const uint64 freq = PPCTimer_armCounterFrequency();
+	// 64.64 fixed point: floor(CORE_CLOCK * 2^64 / freq).
+	const uint64 mulFixed = (uint64)(((unsigned __int128)Espresso::CORE_CLOCK << 64) / (unsigned __int128)freq);
+	const uint64 now = __rdtsc();
+
+	uint64 carriedTick = 0;
+	if (!resetToZero)
+	{
+		if (TimebaseAnchor* previous = s_timebaseAnchor.load(std::memory_order_acquire))
+		{
+			const uint64 delta = now - previous->cntAtAnchor;
+			carriedTick = previous->tickAtAnchor + ((PPCTimer_mulHigh(delta, previous->mulFixed) << 3ull) >> previous->shift);
+		}
+	}
+
+	auto* fresh = new TimebaseAnchor{now, carriedTick, mulFixed, ActiveSettings::GetTimerShiftFactor()};
+	TimebaseAnchor* old = s_timebaseAnchor.exchange(fresh, std::memory_order_acq_rel);
+	if (old)
+		s_retiredAnchors.push_back(old);
+
+	s_anchorWriteLock.unlock();
+}
+
+void PPCTimer_onTimerShiftFactorChanged()
+{
+	PPCTimer_republishAnchor(false);
+}
+
+// thread safe, and genuinely lock-free: one acquire load and arithmetic over fields that
+// never change after publication.
+uint64 PPCTimer_getFromRDTSC()
+{
+	TimebaseAnchor* anchor = s_timebaseAnchor.load(std::memory_order_acquire);
+	if (!anchor) [[unlikely]]
+	{
+		PPCTimer_republishAnchor(true);
+		anchor = s_timebaseAnchor.load(std::memory_order_acquire);
+		if (!anchor)
+			return 0;
+	}
+	// cntvct_el0 is monotonic, so this subtraction cannot go negative and needs no clamp.
+	const uint64 delta = __rdtsc() - anchor->cntAtAnchor;
+	return anchor->tickAtAnchor + ((PPCTimer_mulHigh(delta, anchor->mulFixed) << 3ull) >> anchor->shift);
+}
+
+#else
 
 // thread safe
 uint64 PPCTimer_getFromRDTSC()
@@ -165,3 +312,11 @@ uint64 PPCTimer_getFromRDTSC()
 	sTimerSpinlock.unlock();
 	return _tickSummary;
 }
+
+// The x86 path reads ActiveSettings::GetTimerShiftFactor() on every call, so a change
+// takes effect on its own and there is nothing to republish.
+void PPCTimer_onTimerShiftFactorChanged()
+{
+}
+
+#endif // !__aarch64__
