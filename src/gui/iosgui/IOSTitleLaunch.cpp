@@ -27,6 +27,7 @@
 #include "Cafe/TitleList/TitleInfo.h"
 #include "Cafe/TitleList/TitleList.h"
 #include "Cafe/Filesystem/FST/KeyCache.h"
+#include "Cafe/Filesystem/FST/FST.h"
 #include "config/ActiveSettings.h"
 #include "Cemu/Logging/CemuLogging.h"
 
@@ -55,6 +56,23 @@ enum
 	IOS_TITLE_LAUNCH_UNSUPPORTED_FORMAT = 5,
 	IOS_TITLE_LAUNCH_BASE_NOT_FOUND = 6,
 };
+
+// What a probe reports. Mirrored by IOSTitleProbe in src/ios/Bridge/CemuBridge.h, plain
+// types across the boundary so neither side includes the other's header.
+struct IOSTitleProbe
+{
+	int status;
+	int format;
+	bool needsKey;
+	bool haveKey;
+	bool probedDeeply;
+	unsigned long long titleId;
+	unsigned int titleVersion;
+	unsigned long long fileSizeBytes;
+	char titleName[256];
+};
+
+int IOSTitleInspect_Probe(const char* pathStr, int depth, IOSTitleProbe* out);
 
 // Defined below, next to the rest of the key handling. Declared here because the
 // launch path above it calls it too.
@@ -283,4 +301,104 @@ int IOSTitleLaunch_ReloadAndCountKeys()
 		count++;
 	cemuLog_log(LogType::Force, "iOS: keys.txt reloaded, {} key(s) available", count);
 	return (int)count;
+}
+
+// Answers "what is this file, and can I open it" WITHOUT launching it.
+//
+// WHY THIS DID NOT EXIST AND SHOULD HAVE
+//
+// Until now the only way to find out whether a game was encrypted, or whether the user
+// had the key for it, was to launch it and read the failure. So the library could not say
+// anything about a game before you tapped Play, and "this needs a key you have not
+// imported" arrived as a failed boot rather than as a fact on the card.
+//
+// The cheap half of this is genuinely cheap and was sitting there already:
+// FSTVolume::FindDiscKey() is public and static, takes a path, reads 48 bytes at 0x18100
+// and tries each cached key against a decrypt-to-zero oracle. No FST parse, no XML, no
+// mount. That is the entire import-time question answered in milliseconds.
+//
+// KEY MATERIAL NEVER LEAVES THIS FUNCTION. FindDiscKey writes into a stack-local AesKey
+// that is never read, never copied out and never formatted; the struct below carries a
+// bool. No log line in this file takes a key as an argument, and none should ever be
+// added - this comment is here because the next person to add a diagnostic here is the
+// risk, not the current code.
+int IOSTitleInspect_Probe(const char* pathStr, int depth, IOSTitleProbe* out)
+{
+	if (!pathStr || !out)
+		return 0;
+	*out = IOSTitleProbe{};
+	out->status = IOS_TITLE_LAUNCH_UNSUPPORTED_FORMAT;
+
+	const fs::path path{pathStr};
+	std::error_code ec;
+	out->fileSizeBytes = (unsigned long long)fs::file_size(path, ec);
+	if (ec)
+		out->fileSizeBytes = 0;
+
+	// Keys first, because whether one is present is most of what this is asked.
+	IOSTitleLaunch_AdoptDroppedKeys();
+	KeyCache_Reload();
+
+	const CafeTitleFileType fileType = DetermineCafeSystemFileType(path);
+	if (fileType == CafeTitleFileType::RPX || fileType == CafeTitleFileType::ELF)
+	{
+		// Homebrew. Needs no keys at all, and never has.
+		out->format = 6;
+		out->status = IOS_TITLE_LAUNCH_OK;
+		return 1;
+	}
+
+	std::string ext = path.extension().string();
+	for (char& c : ext)
+		c = _ansiToLower(c);
+	// Only disc images are encrypted with a key from keys.txt. A .wua, an extracted
+	// folder and a NUS install all carry their own ticket, which is why they work for
+	// people who have never had a keys.txt at all - worth being precise about, because
+	// telling someone they need a key when they do not is its own kind of broken.
+	out->needsKey = (ext == ".wud" || ext == ".wux" || ext == ".iso");
+	if (out->needsKey)
+	{
+		NCrypto::AesKey discKey{};
+		out->haveKey = FSTVolume::FindDiscKey(path, discKey);
+		if (!out->haveKey)
+		{
+			out->status = IOS_TITLE_LAUNCH_NO_DISC_KEY;
+			return 1;
+		}
+	}
+
+	if (depth <= 0)
+	{
+		out->status = IOS_TITLE_LAUNCH_OK;
+		return 1;
+	}
+
+	// The expensive half: opens the archive, parses the FST and reads meta.xml. This is
+	// exactly the step that took 1.8 seconds and killed a Mario Kart 8 launch on a
+	// 512 KB stack, so it must never run on the main thread and never inside a SwiftUI
+	// body. Callers get it on a big-stack worker or not at all.
+	TitleInfo info{path};
+	if (!info.IsValid())
+	{
+		switch (info.GetInvalidReason())
+		{
+		case TitleInfo::InvalidReason::NO_DISC_KEY: out->status = IOS_TITLE_LAUNCH_NO_DISC_KEY; break;
+		case TitleInfo::InvalidReason::NO_TITLE_TIK: out->status = IOS_TITLE_LAUNCH_NO_TITLE_TIK; break;
+		default: out->status = IOS_TITLE_LAUNCH_UNSUPPORTED_FORMAT; break;
+		}
+		return 1;
+	}
+
+	out->format = (int)info.GetFormat();
+	out->titleId = (unsigned long long)info.GetAppTitleId();
+	out->titleVersion = info.GetAppTitleVersion();
+	out->probedDeeply = true;
+	out->status = IOS_TITLE_LAUNCH_OK;
+
+	if (const auto* meta = info.GetMetaInfo())
+	{
+		const std::string name = meta->GetShortName(CafeConsoleLanguage::EN);
+		std::snprintf(out->titleName, sizeof(out->titleName), "%s", name.c_str());
+	}
+	return 1;
 }
