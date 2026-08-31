@@ -416,6 +416,22 @@ bool cemu_bridge_pipeline_cache_enabled(void);
 void cemu_bridge_set_geometry_shader_emulation_enabled(bool enabled);
 bool cemu_bridge_geometry_shader_emulation_enabled(void);
 
+// Shader cache maintenance. Two genuinely different things get called "the shader cache"
+// and deleting them has very different consequences, so they are separate:
+//
+//   learned  - shaderCache/transferable. The Wii U bytecode of every shader the title has
+//              ever revealed. This is what makes compiling ahead of play possible at all;
+//              a title only reveals a shader by drawing with it. Deleting it throws that
+//              knowledge away and it only comes back by playing those parts again.
+//   compiled - shaderCache/precompiled. The compiled GPU binaries. Deleting these costs
+//              one slow launch and nothing else, because they rebuild from the learned
+//              cache automatically.
+//
+// titleId 0 means every title. Returns bytes freed, or -1 on error.
+long long cemu_bridge_clear_shader_cache(unsigned long long titleId, bool includeLearned);
+// Returns 0 on success. Either out pointer may be null.
+int cemu_bridge_shader_cache_stats(unsigned long long titleId, long long* outLearnedBytes, long long* outCompiledBytes);
+
 void cemu_bridge_set_touch(bool touched, float x, float y);
 
 void cemu_bridge_release_all_buttons(void);

@@ -71,6 +71,10 @@ struct SettingsView: View {
     // Off by default on purpose: it is new, it only matters on older hardware, and a
     // build nobody can install is worse than a feature nobody turned on.
     @AppStorage("muffin.geometryShaderEmulation") private var geometryShaderEmulation = false
+    @State private var learnedCacheBytes: Int64 = 0
+    @State private var compiledCacheBytes: Int64 = 0
+    @State private var confirmClearLearned = false
+    @State private var cacheStatusMessage: String?
     @AppStorage(ControllerLayoutSettings.deadzoneKey)
     private var stickDeadzone = ControllerLayoutSettings.defaultDeadzone
     @AppStorage(ControllerLayoutSettings.stickCurveKey)
@@ -373,6 +377,63 @@ struct SettingsView: View {
                     }
                     .foregroundColor(MuffinTheme.brownDarkest)
 
+                    // Two separate buttons on purpose. One of these is free to press and
+                    // the other throws away something that can only be earned back by
+                    // playing, and a single "clear cache" button would hide that.
+                    Section {
+                        HStack {
+                            Text("Compiled shaders")
+                            Spacer()
+                            Text(Self.formatBytes(compiledCacheBytes))
+                                .foregroundColor(.secondary)
+                        }
+                        HStack {
+                            Text("Learned shaders")
+                            Spacer()
+                            Text(Self.formatBytes(learnedCacheBytes))
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button {
+                            let freed = cemu_bridge_clear_shader_cache(0, false)
+                            cacheStatusMessage = freed < 0
+                                ? "Cannot clear this while a game is running."
+                                : "Freed \(Self.formatBytes(freed)). The next launch of each game will be slow once, then back to normal."
+                            refreshCacheStats()
+                        } label: {
+                            Label("Clear compiled shaders", systemImage: "arrow.counterclockwise")
+                        }
+
+                        Button(role: .destructive) {
+                            confirmClearLearned = true
+                        } label: {
+                            Label("Clear everything, including learned", systemImage: "trash")
+                        }
+
+                        if let cacheStatusMessage {
+                            Text(cacheStatusMessage)
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    } header: {
+                        Text("Shader cache")
+                    } footer: {
+                        Text("Compiled shaders rebuild by themselves - clearing them costs one slow launch and is the safe thing to try if a game renders wrongly after an update. Learned shaders are the record of which shaders each game has ever used, which is the only reason anything can be compiled before you play; clearing those throws that away until you play those parts again.")
+                    }
+                    .foregroundColor(MuffinTheme.brownDarkest)
+                    .confirmationDialog("Clear learned shaders too?", isPresented: $confirmClearLearned, titleVisibility: .visible) {
+                        Button("Clear everything", role: .destructive) {
+                            let freed = cemu_bridge_clear_shader_cache(0, true)
+                            cacheStatusMessage = freed < 0
+                                ? "Cannot clear this while a game is running."
+                                : "Freed \(Self.formatBytes(freed)). Games will stutter while they relearn their shaders."
+                            refreshCacheStats()
+                        }
+                        Button("Cancel", role: .cancel) { }
+                    } message: {
+                        Text("This cannot be undone by pressing a button - each game only relearns its shaders by being played again.")
+                    }
+
                     Section {
                         Toggle(isOn: $showLaunchLog) {
                             Label("Show launch log", systemImage: "text.alignleft")
@@ -461,6 +522,28 @@ struct SettingsView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .onAppear { refreshCacheStats() }
+    }
+
+    private func refreshCacheStats() {
+        var learned: Int64 = 0
+        var compiled: Int64 = 0
+        // titleId 0 means every game, which is what this screen is showing.
+        _ = cemu_bridge_shader_cache_stats(0, &learned, &compiled)
+        learnedCacheBytes = learned
+        compiledCacheBytes = compiled
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        if bytes <= 0 { return "none" }
+        let units = ["B", "KB", "MB", "GB"]
+        var value = Double(bytes)
+        var unit = 0
+        while value >= 1024 && unit < units.count - 1 {
+            value /= 1024
+            unit += 1
+        }
+        return unit == 0 ? "\(Int(value)) B" : String(format: "%.1f %@", value, units[unit])
     }
 
     private func handleKeysImport(_ result: Result<[URL], Error>) {
