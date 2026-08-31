@@ -14,6 +14,7 @@ struct ContentView: View {
             if showingGameBrowser {
                 GameBrowserView(
                     gameManager: gameManager,
+                    controllerSkin: $selectedSkin,
                     selectedGame: $selectedGame,
                     showingGameBrowser: $showingGameBrowser,
                     showingFavorites: $showingFavorites
@@ -137,6 +138,9 @@ struct BootFailureView: View {
 
 struct GameBrowserView: View {
     @ObservedObject var gameManager: GameManager
+    /// Only so Settings can preview the pad wearing the skin actually in use. A binding
+    /// rather than a copy because the skin picker inside Settings can change it.
+    @Binding var controllerSkin: WiiUControllerSkin
     @Binding var selectedGame: GameMetadata?
     @Binding var showingGameBrowser: Bool
     @Binding var showingFavorites: Bool
@@ -302,7 +306,7 @@ struct GameBrowserView: View {
             IconPickerView()
         }
         .sheet(isPresented: $showingSettings) {
-            SettingsView(gameManager: gameManager, skin: selectedSkin)
+            SettingsView(skin: controllerSkin, gameManager: gameManager)
         }
         // ONE importer. See ImportKind above for why two of them meant neither worked.
         // The allowed types are read at presentation time, so setting importKind and
