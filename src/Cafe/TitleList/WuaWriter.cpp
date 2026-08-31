@@ -110,6 +110,69 @@ namespace WuaWriter
 			}
 		};
 
+		/// Streams one mounted title out to real files on disk, mirroring AddFiles but
+		/// without an archive in the middle. Same 32 KB chunking - large enough that the
+		/// per-read overhead disappears, small enough not to hold a title's worth of
+		/// memory on a device that gets killed for using too much.
+		bool CopyTreeToDisk(Context& ctx, const fs::path& outRoot, const std::string& fscPath,
+							Progress& progress, std::string& errorOut)
+		{
+			sint32 status;
+			std::unique_ptr<FSCVirtualFile> dir(fsc_openDirIterator(fscPath.c_str(), &status));
+			if (!dir)
+				return false;
+			std::error_code ec;
+			fs::create_directories(outRoot, ec);
+			FSCDirEntry entry;
+			std::vector<uint8> buffer(32 * 1024);
+			while (fsc_nextDir(dir.get(), &entry))
+			{
+				if (progress.cancelRequested)
+					return false;
+				const fs::path target = outRoot / entry.path;
+				if (entry.isFile)
+				{
+					std::unique_ptr<FSCVirtualFile> file(
+						fsc_open((fscPath + entry.path).c_str(),
+								 FSC_ACCESS_FLAG::OPEN_FILE | FSC_ACCESS_FLAG::READ_PERMISSION, &status));
+					if (!file)
+						return false;
+					std::ofstream out(target, std::ios::binary | std::ios::trunc);
+					if (!out.is_open())
+					{
+						errorOut = "could not create a file in the output folder";
+						return false;
+					}
+					while (true)
+					{
+						const uint32 read = file->fscReadData(buffer.data(), buffer.size());
+						if (read == 0)
+							break;
+						out.write((const char*)buffer.data(), (std::streamsize)read);
+						if (!out.good())
+						{
+							errorOut = "a write failed - check free space";
+							return false;
+						}
+						if (progress.cancelRequested)
+							return false;
+						progress.transferredInputBytes += read;
+					}
+					out.flush();
+					if (!out.good())
+					{
+						errorOut = "a write could not be flushed - check free space";
+						return false;
+					}
+					progress.currentFileIndex++;
+				}
+				else if (entry.isDirectory &&
+						 !CopyTreeToDisk(ctx, target, fmt::format("{}{}/", fscPath, entry.path), progress, errorOut))
+					return false;
+			}
+			return true;
+		}
+
 		/// Mount, do something, unmount - so a failure part-way cannot leave a title
 		/// mounted and the next attempt fighting it for the same path.
 		template <typename Fn>
@@ -250,6 +313,68 @@ namespace WuaWriter
 			errorOut = "the converted file is missing meta/meta.xml";
 			return false;
 		}
+		return true;
+	}
+
+	bool ConvertTitlesToFolder(std::span<TitleInfo* const> titles, const fs::path& outputDir,
+							   Progress& progress, std::string& errorOut)
+	{
+		if (titles.empty())
+		{
+			errorOut = "nothing to convert";
+			progress.stage = Stage::Failed;
+			return false;
+		}
+
+		std::error_code ec;
+		fs::create_directories(outputDir, ec);
+		if (ec)
+		{
+			errorOut = "could not create the output folder";
+			progress.stage = Stage::Failed;
+			return false;
+		}
+
+		// Same two passes as the archive path, and the same reason for the first one: a
+		// progress bar needs a denominator before a twenty-minute copy starts.
+		Context ctx;
+		ctx.progress = &progress;
+		progress.stage = Stage::CollectingFiles;
+		progress.totalFileCount = 0;
+		progress.currentFileIndex = 0;
+		for (TitleInfo* title : titles)
+		{
+			if (!WithMounted(title, [&](const std::string& mount) { return ctx.CountFiles(mount); }))
+			{
+				errorOut = progress.cancelRequested ? "cancelled" : "could not read the source";
+				progress.stage = progress.cancelRequested ? Stage::Cancelled : Stage::Failed;
+				return false;
+			}
+		}
+
+		progress.stage = Stage::Compressing;
+		bool ok = true;
+		for (TitleInfo* title : titles)
+		{
+			ok = WithMounted(title, [&](const std::string& mount) {
+				return CopyTreeToDisk(ctx, outputDir, mount, progress, errorOut);
+			});
+			if (!ok)
+				break;
+		}
+
+		if (!ok)
+		{
+			// A half-copied folder looks exactly like a real title to a library scan, so
+			// it must not be left behind.
+			fs::remove_all(outputDir, ec);
+			if (errorOut.empty())
+				errorOut = progress.cancelRequested ? "cancelled" : "could not write the output";
+			progress.stage = progress.cancelRequested ? Stage::Cancelled : Stage::Failed;
+			return false;
+		}
+
+		progress.stage = Stage::Done;
 		return true;
 	}
 

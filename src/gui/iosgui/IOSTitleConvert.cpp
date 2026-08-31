@@ -44,6 +44,7 @@ namespace
 	std::atomic<int> s_result{-1}; // -1 running, 0 ok, 1 failed
 	std::string s_sourcePath;
 	std::string s_outputPath;
+	bool s_asFolder = false;
 
 	void ConvertWorker()
 	{
@@ -80,7 +81,10 @@ namespace
 		cemuLog_log(LogType::Force, "iOS: converting {:016x} to {}", (uint64)titleId, _pathToUtf8(output));
 
 		TitleInfo* titles[] = {&title};
-		if (!WuaWriter::ConvertTitlesToFile(titles, output, s_progress, s_error))
+		const bool converted = s_asFolder
+			? WuaWriter::ConvertTitlesToFolder(titles, output, s_progress, s_error)
+			: WuaWriter::ConvertTitlesToFile(titles, output, s_progress, s_error);
+		if (!converted)
 		{
 			if (s_error.empty())
 				s_error = "The conversion did not finish.";
@@ -95,7 +99,12 @@ namespace
 		s_progress.stage = WuaWriter::Stage::Verifying;
 		if (!WuaWriter::VerifyFile(output, titleId, s_error))
 		{
-			fs::remove(output, ec);
+			// Whole tree for a folder, single file for an archive. Either way the
+			// half-made thing must not survive to be offered as a game.
+			if (s_asFolder)
+				fs::remove_all(output, ec);
+			else
+				fs::remove(output, ec);
 			s_progress.stage = WuaWriter::Stage::Failed;
 			s_result = 1;
 			s_running = false;
@@ -110,7 +119,7 @@ namespace
 	}
 } // namespace
 
-extern "C" int IOSTitleConvert_Start(const char* sourcePath, const char* outputPath)
+extern "C" int IOSTitleConvert_Start(const char* sourcePath, const char* outputPath, int asFolder)
 {
 	if (!sourcePath || !outputPath)
 		return 0;
@@ -120,6 +129,7 @@ extern "C" int IOSTitleConvert_Start(const char* sourcePath, const char* outputP
 
 	s_sourcePath = sourcePath;
 	s_outputPath = outputPath;
+	s_asFolder = (asFolder != 0);
 	s_error.clear();
 	s_result = -1;
 	s_progress.stage = WuaWriter::Stage::Starting;

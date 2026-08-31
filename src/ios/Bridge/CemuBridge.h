@@ -383,7 +383,17 @@ typedef struct {
     unsigned long long transferredInputBytes;
 } IOSConvertProgress;
 
-int  cemu_bridge_convert_to_wua_start(const char* sourcePath, const char* outputPath);
+/// asFolder: 0 writes a .wua, 1 writes a plain code/content/meta folder.
+///
+/// A .wua is compressed with zstd, so it is a third to a half the size and every read
+/// decompresses. A folder is uncompressed and read straight off the filesystem, at two
+/// to three times the disk. Which is better depends on whether the device is short of
+/// storage or short of CPU, so it is the user's call rather than ours.
+///
+/// Note that neither can be a bare .rpx: an .rpx is only the executable, and a retail
+/// title is code/ plus content/ plus meta/ - the assets are most of the game and most of
+/// the bytes. An .rpx on its own would boot nothing.
+int  cemu_bridge_convert_to_wua_start(const char* sourcePath, const char* outputPath, bool asFolder);
 void cemu_bridge_convert_to_wua_poll(IOSConvertProgress* out);
 void cemu_bridge_convert_to_wua_cancel(void);
 /// -1 while running, 0 succeeded, 1 failed. On failure errBuf receives a sentence meant

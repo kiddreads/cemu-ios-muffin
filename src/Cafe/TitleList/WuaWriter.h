@@ -67,9 +67,32 @@ namespace WuaWriter
 	bool ConvertTitles(std::span<TitleInfo* const> titles, WriteFn onWrite,
 					   Progress& progress, std::string& errorOut);
 
-	/// Opens outputPath, streams into it, closes it.
+	/// Opens outputPath, streams into it, closes it. Produces a .wua.
 	bool ConvertTitlesToFile(std::span<TitleInfo* const> titles, const fs::path& outputPath,
 							 Progress& progress, std::string& errorOut);
+
+	/// Writes the decrypted title out as a plain folder - code/, content/, meta/ - instead
+	/// of an archive.
+	///
+	/// WHY BOTH EXIST
+	///
+	/// ZArchive compresses with zstd, so every read from a .wua decompresses. That is a
+	/// real cost and it is fair to want to avoid it. A folder is decrypted, uncompressed
+	/// and read straight off the filesystem.
+	///
+	/// The trade is not obvious in either direction, which is why this is a choice rather
+	/// than a replacement:
+	///
+	///   .wua    - roughly a third to a half the size. Decompression is native ARM64 code
+	///             at hundreds of MB/s, against an emulator whose bottleneck is an
+	///             interpreted PowerPC core, and a smaller file is also less flash I/O.
+	///   folder  - no decompression at all, but two to three times the disk. On a device
+	///             where storage is fixed and a Wii U title can be 25 GB, that is the
+	///             cost that actually bites most people.
+	///
+	/// Both are formats the engine already mounts, so neither is a special case at load.
+	bool ConvertTitlesToFolder(std::span<TitleInfo* const> titles, const fs::path& outputDir,
+							   Progress& progress, std::string& errorOut);
 
 	/// Reopens a written archive and confirms it actually contains the title it should.
 	/// The Android version's verification was a `// todo` that only checked the file

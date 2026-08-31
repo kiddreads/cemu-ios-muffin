@@ -511,7 +511,7 @@ void cemu_bridge_start_memory_watchdog(void) {
     void IOSInput_SetTouch(bool touched, float x, float y);
 
     // Defined in src/gui/iosgui/IOSTitleConvert.cpp.
-    int  IOSTitleConvert_Start(const char* sourcePath, const char* outputPath);
+    int  IOSTitleConvert_Start(const char* sourcePath, const char* outputPath, int asFolder);
     void IOSTitleConvert_Poll(struct IOSConvertProgress* out);
     void IOSTitleConvert_Cancel(void);
     int  IOSTitleConvert_Result(char* errBuf, int errBufLen);
@@ -1996,11 +1996,11 @@ void cemu_bridge_set_stick_axis(CemuBridgeStick stick, float x, float y) {
 #endif
 }
 
-int cemu_bridge_convert_to_wua_start(const char* sourcePath, const char* outputPath) {
+int cemu_bridge_convert_to_wua_start(const char* sourcePath, const char* outputPath, bool asFolder) {
 #if defined(CEMU_CORE_AVAILABLE)
-    return IOSTitleConvert_Start(sourcePath, outputPath);
+    return IOSTitleConvert_Start(sourcePath, outputPath, asFolder ? 1 : 0);
 #else
-    (void)sourcePath; (void)outputPath; return 0;
+    (void)sourcePath; (void)outputPath; (void)asFolder; return 0;
 #endif
 }
 
