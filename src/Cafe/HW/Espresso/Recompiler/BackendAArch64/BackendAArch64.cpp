@@ -146,27 +146,48 @@ class AppleJitAllocator : public Allocator
 		void* p = MAP_FAILED;
 		const char* how = nullptr;
 
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-		// The CS_DEBUGGED path. Executable from the moment it exists, so nothing has
-		// to promote it later, which is the step that was silently failing.
-		p = mmap(nullptr, size, rwx, baseMode, -1, 0);
+		// MAP_JIT FIRST, and asking for PROT_EXEC. This is the mapping the CS_DEBUGGED
+		// exemption actually attaches to - it is the entire reason JIT enablers exist.
+		//
+		// It was not first before, and the device log is what corrected that. v2.0 took
+		// the plain-RWX branch below, reported "read-write-execute at map time" exactly
+		// as designed, and then still took SIGBUS on the first entry into generated
+		// code. So a plain anonymous mapping does not become runnable merely by being
+		// requested executable at creation: the kernel hands it over and code-signing
+		// still refuses to execute it. Same refusal as mprotect, one step earlier.
+		//
+		// MAP_JIT had been deprioritised on evidence that has since expired. In v1.23 it
+		// failed outright with ERR_CANT_ALLOC - but that was Xbyak's own attempt, asking
+		// for read-write only, on a process where CS_DEBUGGED was NOT set. It is set
+		// now, so the attempt that failed then is the one most likely to succeed.
+		p = mmap(nullptr, size, rwx, baseMode | MAP_JIT, -1, 0);
 		if (p != MAP_FAILED)
 		{
 			m_mappedExecutable = true;
-			how = "read-write-execute at map time (CS_DEBUGGED)";
+			how = "MAP_JIT, executable at map time - the CS_DEBUGGED path";
+		}
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+		if (p == MAP_FAILED)
+		{
+			p = mmap(nullptr, size, rwx, baseMode, -1, 0);
+			if (p != MAP_FAILED)
+			{
+				m_mappedExecutable = true;
+				how = "read-write-execute at map time, no MAP_JIT - known to map but NOT to run on iOS";
+			}
 		}
 #endif
 		if (p == MAP_FAILED)
 		{
 			p = mmap(nullptr, size, PROT_READ | PROT_WRITE, baseMode | MAP_JIT, -1, 0);
 			if (p != MAP_FAILED)
-				how = "MAP_JIT, promoted by mprotect";
+				how = "MAP_JIT read-write, promoted by mprotect";
 		}
 		if (p == MAP_FAILED)
 		{
 			p = mmap(nullptr, size, PROT_READ | PROT_WRITE, baseMode, -1, 0);
 			if (p != MAP_FAILED)
-				how = "read-write, promoted by mprotect - this is the path that gave SIGBUS on iOS";
+				how = "read-write, promoted by mprotect - this path gave SIGBUS on iOS";
 		}
 		if (p == MAP_FAILED)
 			throw Error(ERR_CANT_ALLOC);

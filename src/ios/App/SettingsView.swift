@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 private extension Bundle {
@@ -22,6 +23,10 @@ struct SettingsView: View {
     /// the sheet anyway.
     @AppStorage(LaunchLogSettings.showKey) private var showLaunchLog = true
     @AppStorage("muffin.showLaunchIntro") private var launchIntroEnabled = true
+    @State private var deviceReportCopied = false
+    /// Computed on demand. The bridge owns the string and it is stable for the
+    /// process's lifetime, so there is nothing to refresh and nothing to invalidate.
+    private var deviceReport: String { String(cString: cemu_bridge_device_report()) }
     /// Read by DisplayRouter through `RenderScale.current` at surface-registration time,
     /// not observed by it - hence AppStorage here and a plain UserDefaults read there.
     @AppStorage(RenderScale.storageKey) private var renderScaleRaw = RenderScale.balanced.rawValue
@@ -250,10 +255,39 @@ struct SettingsView: View {
                     // Collection is always on regardless (see IOSLiveLog.h) - gating
                     // that too would mean the toggle could only ever show the boot AFTER
                     // the one that failed.
-                    // The intro is deliberately in the same section as the launch log
-                    // and directly above it, because they occupy the same screen at the
-                    // same moment and turning the log on hides the intro. Putting them
-                    // apart would make that look like a bug.
+                    // The device report, above the diagnostics toggles because it is
+                    // the thing to send FIRST when something is wrong.
+                    //
+                    // MuffinEMU installs on any arm64 iPhone or iPad running iOS 15 or
+                    // later, and almost none of those have ever run it. Every finding on
+                    // this port so far - no BC texture formats, no mesh shaders, the
+                    // memory ceiling - depended on knowing exactly which chip was under
+                    // it, and a report from hardware nobody here owns is unanswerable
+                    // without that. One tap to copy is the difference between a bug
+                    // report that can be acted on and one that cannot.
+                    Section {
+                        Text(deviceReport)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Button {
+                            UIPasteboard.general.string = deviceReport
+                            deviceReportCopied = true
+                        } label: {
+                            Label(deviceReportCopied ? "Copied" : "Copy device report",
+                                  systemImage: deviceReportCopied ? "checkmark" : "doc.on.doc")
+                        }
+                    } header: {
+                        Text("This device")
+                    } footer: {
+                        Text("Send this with any bug report. It says which chip, how much memory, and which build - which is what makes everything else in a log mean something.")
+                    }
+                    .foregroundColor(MuffinTheme.brownDarkest)
+
+                    // The intro toggle sits with the launch log below, not here: they
+                    // occupy the same screen at the same moment and turning the log on
+                    // hides the intro, so separating them would make that look like a bug.
                     Section {
                         Toggle(isOn: $launchIntroEnabled) {
                             Label("Play the launch intro", systemImage: "sparkles")
