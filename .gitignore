@@ -58,3 +58,6 @@ bin/graphicPacks/*
 # generated / junk
 ._*
 src/ios/Cemu-iOS.xcodeproj/
+
+# Claude Code session state and agent worktrees - never part of the source tree
+.claude/
