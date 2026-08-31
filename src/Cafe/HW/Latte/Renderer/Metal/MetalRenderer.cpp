@@ -149,19 +149,6 @@ void MetalRenderer::ResolvePositionInvariance()
     cemuLog_log(LogType::Force, "Metal: position invariance = {} (title {:016x})", m_positionInvariance, CafeSystem::GetForegroundTitleId());
 }
 
-// Declared in MetalRenderer.h and used by GetMtlShaderType() there, but never defined -
-// which is why the link failed with "_g_mtlEmulateGeometryShader, referenced from
-// MetalRenderer::draw_execute".
-//
-// This is scaffolding for emulating geometry shaders on GPUs that have no mesh shaders,
-// written by a parallel session and swept into the tree by a `git add -A` in my revert
-// commit. Defining it false rather than deleting it: the feature is genuinely wanted -
-// it is what would fix the 19000 dropped draws on an A12Z - and removing a half-finished
-// design out from under whoever is writing it costs more than one inert bool. False
-// means every code path behaves exactly as it did before this symbol existed.
-
-bool g_mtlEmulateGeometryShader = false;
-
 MetalRenderer::MetalRenderer()
 {
     // Pick a device

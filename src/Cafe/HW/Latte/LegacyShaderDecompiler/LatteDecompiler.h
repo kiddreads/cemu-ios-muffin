@@ -192,10 +192,6 @@ struct LatteDecompilerShader
 	// analyzer stage (geometry shader parameters/inputs)
 	uint32 ringParameterCount{ 0 };
 	uint32 ringParameterCountFromPrevStage{ 0 }; // used in geometry shader to hold VS ringParameterCount
-	// Metal geometry shader emulation: byte size of one emitted vertex as the emulated
-	// geometry stage stores it. The renderer needs it to size the buffer the stage writes
-	// into, and only the emitter knows how many parameters the shader actually exports.
-	uint32 mtlGsEmulationVertexStride{ 0 };
 	// analyzer stage (misc)
 	std::bitset<LATTE_NUM_STREAMOUT_BUFFER> streamoutBufferWriteMask;
 	bool hasStreamoutBufferWrite{ false };
