@@ -1125,6 +1125,22 @@ namespace
 
 	std::atomic<bool> s_iosFirstStickLogged{false};
 
+	// The GamePad touchscreen, as reported by the device's own glass.
+	//
+	// Three atomics rather than one struct because they are written from the UI thread
+	// and read from the emulated title's thread with no lock, exactly like the button and
+	// axis overrides above. A torn read here is a touch that lands a few pixels out for
+	// one frame, which is invisible; a lock here would put a finger-down behind whatever
+	// else holds it.
+	//
+	// Written in the order x, y, then active - and read in the reverse order - so a
+	// reader that sees active==true is guaranteed to see coordinates that were stored
+	// before it. The release/acquire pair on the flag is what makes that true.
+	std::atomic<bool> s_iosTouchActive{false};
+	std::atomic<float> s_iosTouchX{0.0f};
+	std::atomic<float> s_iosTouchY{0.0f};
+	std::atomic<bool> s_iosFirstTouchLogged{false};
+
 	// A silent input path is unfalsifiable from a device log, so say something exactly
 	// once for each of the two outcomes that matter: it worked, or there was nothing to
 	// deliver it to.
@@ -1285,6 +1301,43 @@ void IOSInput_SetButtonState(int button, bool pressed)
 		cemuLog_log(LogType::Force, "iOS: first on-screen press reached the engine - bridge button {} -> VPAD {} ({})",
 					button, static_cast<int>(mapping), std::string(VPADController::get_button_name(mapping)));
 	}
+}
+
+void IOSInput_SetTouch(bool touched, float x, float y)
+{
+	// No s_iosInputReady gate and no emulated-controller lookup, unlike the button and
+	// stick setters. This does not write into an override map - VPADController::update_touch
+	// reads it directly - so there is no map to have been populated and nothing to be too
+	// early for. It is safe from the moment the process starts.
+	if (!touched)
+	{
+		// Coordinates are deliberately left where they were. update_touch keeps the last
+		// position after a release on purpose (NGDK titles read x/y after touch goes off),
+		// and clearing them here would defeat that.
+		s_iosTouchActive.store(false, std::memory_order_release);
+		return;
+	}
+
+	// NaN would survive the clamp below and reach the guest as a coordinate, so it is
+	// rejected outright rather than sanitised into a lie about where the finger is.
+	if (std::isnan(x) || std::isnan(y))
+		return;
+
+	s_iosTouchX.store(std::clamp(x, 0.0f, 1.0f), std::memory_order_relaxed);
+	s_iosTouchY.store(std::clamp(y, 0.0f, 1.0f), std::memory_order_relaxed);
+	s_iosTouchActive.store(true, std::memory_order_release);
+
+	if (!s_iosFirstTouchLogged.exchange(true))
+		cemuLog_log(LogType::Force, "iOS: first GamePad touch reached the engine");
+}
+
+bool IOSInput_GetTouch(float& xOut, float& yOut)
+{
+	if (!s_iosTouchActive.load(std::memory_order_acquire))
+		return false;
+	xOut = s_iosTouchX.load(std::memory_order_relaxed);
+	yOut = s_iosTouchY.load(std::memory_order_relaxed);
+	return true;
 }
 
 void IOSInput_SetStickAxis(int stick, float x, float y)

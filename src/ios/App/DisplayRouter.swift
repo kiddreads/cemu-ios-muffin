@@ -91,6 +91,36 @@ final class DisplayRouter {
     private var observing = false
     private var tvSurfaceRegistered = false
 
+    /// Which of the two Wii U screens this device is showing.
+    ///
+    /// Only meaningful while the TV screen is on the device - `deviceOnly` and
+    /// `deviceMirrored`. In `dualScreen` the device already shows the GamePad and the TV
+    /// is on the external display, so there is nothing to swap.
+    ///
+    /// A great many Wii U titles are unplayable without the GamePad screen, not merely
+    /// less convenient: Wind Waker and Twilight Princess keep the map and inventory
+    /// there, Nintendo Land and Game & Wario build whole modes around it, and Splatoon
+    /// puts the map you jump from on it. Until now the engine was simply never asked to
+    /// produce that screen on a single-display device.
+    enum DeviceScreen {
+        case tv
+        case gamepad
+    }
+
+    private(set) var deviceScreen: DeviceScreen = .tv
+
+    /// Swaps which screen the device shows. Fast on purpose - the title is not touched,
+    /// no surface is torn down and rebuilt, and both screens stay registered with the
+    /// renderer. All that changes is which view is in front.
+    func setDeviceScreen(_ screen: DeviceScreen) {
+        guard deviceScreen != screen else { return }
+        deviceScreen = screen
+        syncPadSurface()
+        applyPlacement(reason: screen == .tv
+                       ? "the device was switched to the TV screen"
+                       : "the device was switched to the GamePad screen")
+    }
+
     private init() {}
 
     // MARK: - Lifecycle
@@ -182,6 +212,9 @@ final class DisplayRouter {
         externalWindow?.isHidden = true
         externalWindow = nil
         tvSurfaceRegistered = false
+        // Back to the TV screen for the next launch. Leaving it on the GamePad would
+        // start the next title showing a screen that title may never draw to.
+        deviceScreen = .tv
         log("title stopped; render surfaces will be rebuilt on the next launch")
     }
 
@@ -225,6 +258,22 @@ final class DisplayRouter {
         }
 
         syncPadSurface()
+
+        // Both surfaces keep rendering; only the order changes. That is what makes the
+        // swap instant and reversible - tearing the unused one down would mean rebuilding
+        // a CAMetalLayer on the way back, and the renderer holds a bare pointer into it
+        // from the GPU thread.
+        if placement != .dualScreen, let container = deviceContainer {
+            if deviceScreen == .gamepad, let pad = padRenderView, pad.superview === container {
+                container.bringSubviewToFront(pad)
+                pad.isHidden = false
+            } else if deviceScreen == .tv {
+                padRenderView?.isHidden = true
+                if tvRenderViewStorage?.superview === container {
+                    container.bringSubviewToFront(tvRenderView)
+                }
+            }
+        }
 
         if changed || !tvSurfaceRegistered {
             switch desired {
@@ -297,7 +346,9 @@ final class DisplayRouter {
     /// the GPU thread — see `cemu_bridge_release_pad_render_surface`.
     private func syncPadSurface() {
         guard tvSurfaceRegistered else { return }
-        let wantPad = (placement == .dualScreen)
+        // Either the GamePad has an external-display arrangement to live in, or the user
+        // has asked this device to show it instead of the TV screen.
+        let wantPad = (placement == .dualScreen) || (deviceScreen == .gamepad)
         let havePad = cemu_bridge_has_pad_render_surface()
 
         if wantPad, !havePad, let container = deviceContainer {

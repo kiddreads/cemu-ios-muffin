@@ -353,6 +353,21 @@ void cemu_bridge_set_button_state(CemuBridgeButton button, bool pressed);
 /// control panel being dismissed, the app going to the background, a gesture the system
 /// cancelled out from under it - and would otherwise leave the title holding a direction
 /// with nothing on screen touching it.
+// Reports the device's touchscreen as the GamePad's.
+//
+// x and y are normalised 0..1 across the GAMEPAD SURFACE - the view the pad screen is
+// actually being drawn into - with y measured downward from the top, which is how UIKit
+// hands touches over. The caller maps from its own view's bounds because only it knows
+// where that surface is; passing whole-screen coordinates puts every touch in the wrong
+// place the moment the pad is not fullscreen.
+//
+// The real GamePad touchscreen is resistive and single-touch. There is no way for the
+// guest to receive a second finger, so send one point.
+//
+// Pass touched=false on end/cancel. Coordinates are ignored then and the last position is
+// deliberately kept - some titles read the coordinates after the touch is released.
+void cemu_bridge_set_touch(bool touched, float x, float y);
+
 void cemu_bridge_release_all_buttons(void);
 
 /// Which analog stick an axis call is about.

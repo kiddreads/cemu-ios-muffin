@@ -195,6 +195,32 @@ void VPADController::update_touch(VPADStatus_t& status)
 
 	auto& instance = InputManager::instance();
 	bool pad_view;
+
+	// The device's own touchscreen, when there is one driving this. Checked before the
+	// other two sources because on iOS it IS the GamePad screen - there is no mouse, and
+	// has_position() is for a pointer-style controller that is not what a finger on glass
+	// is. On every other platform nothing ever sets this, so it is one relaxed atomic
+	// load per frame and the behaviour below is unchanged.
+	//
+	// The 3883/92 and 3694/254 constants are not invented here - they are the same
+	// mapping the two branches below already use, which is the calibrated range the real
+	// GamePad digitiser reports. Reusing them rather than deriving a new one is what
+	// keeps a touch landing in the same place regardless of which source produced it.
+	float iosTouchX = 0.0f, iosTouchY = 0.0f;
+	if (IOSInput_GetTouch(iosTouchX, iosTouchY))
+	{
+		status.tpData.touch = kTpTouchOn;
+		status.tpData.validity = kTpValid;
+		status.tpData.x = (uint16)(iosTouchX * 3883.0f + 92.0f);
+		status.tpData.y = (uint16)(4095.0f - iosTouchY * 3694.0f - 254.0f);
+
+		m_last_touch_position = glm::ivec2{status.tpData.x, status.tpData.y};
+
+		status.tpProcessed1 = status.tpData;
+		status.tpProcessed2 = status.tpData;
+		return;
+	}
+
 	if (has_position())
 	{
 		const auto mouse = get_position();

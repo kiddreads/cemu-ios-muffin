@@ -507,6 +507,7 @@ void cemu_bridge_start_memory_watchdog(void) {
     void IOSInput_RefreshDevices();
     void IOSInput_SetButtonState(int button, bool pressed);
     void IOSInput_SetStickAxis(int stick, float x, float y);
+    void IOSInput_SetTouch(bool touched, float x, float y);
     void IOSInput_ReleaseAllButtons();
 
     // Defined in src/gui/iosgui/IOSTitleLaunch.cpp - the real-title launch path, kept on
@@ -1985,6 +1986,14 @@ void cemu_bridge_set_stick_axis(CemuBridgeStick stick, float x, float y) {
     IOSInput_SetStickAxis((int)stick, x, y);
 #else
     (void)stick; (void)x; (void)y;
+#endif
+}
+
+void cemu_bridge_set_touch(bool touched, float x, float y) {
+#if defined(CEMU_CORE_AVAILABLE)
+    IOSInput_SetTouch(touched, x, y);
+#else
+    (void)touched; (void)x; (void)y;
 #endif
 }
 

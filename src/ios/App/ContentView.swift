@@ -565,6 +565,17 @@ struct EmulatorViewOptimized: View {
     @StateObject private var launchLog = LaunchLogStore()
     @State private var launchLogDismissed = false
 
+    /// Which Wii U screen this device is showing. Mirrors DisplayRouter, which owns the
+    /// truth; this copy exists so the button can redraw itself.
+    @State private var showingGamePadScreen = false
+    /// Whether the on-screen controls are drawn at all.
+    ///
+    /// Not @AppStorage: hiding the controls is something you do for a moment to see the
+    /// whole screen or to touch it without obstruction, not a preference. Coming back to
+    /// a game and finding no controls, with no memory of having hidden them, is a bug
+    /// from the player's side even if the state was faithfully restored.
+    @State private var controlsHidden = false
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -618,6 +629,39 @@ struct EmulatorViewOptimized: View {
                             Image(systemName: isEditingControlLayout
                                   ? "checkmark.circle.fill"
                                   : "arrow.up.and.down.and.arrow.left.and.right")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .buttonStyle(MuffinSecondaryButtonStyle())
+
+                        // TV screen <-> GamePad screen. In the top bar rather than in the
+                        // control cluster because it is a mode change, not an input.
+                        //
+                        // Both surfaces stay registered and both keep rendering, so this
+                        // is a reordering rather than a teardown - which is what makes it
+                        // instant and why it can be pressed repeatedly without cost.
+                        Button(action: {
+                            showingGamePadScreen.toggle()
+                            DisplayRouter.shared.setDeviceScreen(showingGamePadScreen ? .gamepad : .tv)
+                        }) {
+                            Image(systemName: showingGamePadScreen ? "tv" : "ipad.landscape")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .buttonStyle(MuffinSecondaryButtonStyle())
+
+                        // Hide/show the controls.
+                        //
+                        // This button must NOT live in the control cluster, because that
+                        // is the thing being hidden - it would take itself away and leave
+                        // no way back. It stays here, always present, for that reason.
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                controlsHidden.toggle()
+                            }
+                            // A button held at the moment the controls stop being able to
+                            // report their own release would stay held inside the title.
+                            cemu_bridge_release_all_buttons()
+                        }) {
+                            Image(systemName: controlsHidden ? "eye.slash" : "eye")
                                 .font(.system(size: 12, weight: .semibold))
                         }
                         .buttonStyle(MuffinSecondaryButtonStyle())
@@ -695,6 +739,39 @@ struct EmulatorViewOptimized: View {
             // No VStack/Spacer any more: the pad positions every control itself against
             // the size it is handed, which is what lets one half be dragged somewhere a
             // bottom-aligned stack could never have put it.
+            // The GamePad touchscreen, when the device is showing that screen.
+            //
+            // UNDER the controls, so a control still wins where one is drawn - the
+            // alternative is a d-pad press also registering as a touch on the map behind
+            // it. With the controls hidden this covers the whole area, which is the point
+            // of being able to hide them.
+            //
+            // Coordinates are normalised against THIS view's bounds rather than the
+            // screen's, because the bridge maps 0..1 onto the pad surface and the pad
+            // surface is what this sits over.
+            if showingGamePadScreen {
+                GeometryReader { geo in
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(
+                            // minimumDistance 0 so a tap registers, not just a drag. A
+                            // Wii U touchscreen is resistive and single-touch, so one
+                            // point is all the guest can receive - there is nothing to
+                            // gain from modelling more.
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    let x = Float(value.location.x / max(geo.size.width, 1))
+                                    let y = Float(value.location.y / max(geo.size.height, 1))
+                                    cemu_bridge_set_touch(true, x, y)
+                                }
+                                .onEnded { _ in
+                                    cemu_bridge_set_touch(false, 0, 0)
+                                }
+                        )
+                }
+                .ignoresSafeArea()
+            }
+
             OptimizedControlPanel(
                 skin: controllerSkin,
                 onInput: { label, pressed in
@@ -713,6 +790,11 @@ struct EmulatorViewOptimized: View {
                 },
                 isEditingLayout: $isEditingControlLayout
             )
+            // Hidden means gone, not transparent: a control left in the hierarchy at zero
+            // opacity still swallows the touches that were supposed to reach the GamePad
+            // screen underneath it, which is the whole reason for hiding it.
+            .opacity(controlsHidden ? 0 : 1)
+            .allowsHitTesting(!controlsHidden)
 
             // The Metal view above must mount (so it can register the render
             // surface) before boot() actually runs, so this state genuinely
