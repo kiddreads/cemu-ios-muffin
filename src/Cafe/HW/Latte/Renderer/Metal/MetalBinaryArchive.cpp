@@ -1,10 +1,10 @@
 #include "Cafe/HW/Latte/Renderer/Metal/MetalBinaryArchive.h"
 #include "Cafe/HW/Latte/Renderer/Metal/MetalRenderer.h"
 #include "Cafe/HW/Latte/Renderer/Metal/MetalCommon.h"
-#include "Cafe/HW/Latte/Renderer/RendererShader.h"
+#include "Common/version.h"
 #include "Cemu/Logging/CemuLogging.h"
 #include "config/ActiveSettings.h"
-#include "GameProfile/GameProfile.h"
+#include "Cafe/GameProfile/GameProfile.h"
 
 #include <sys/sysctl.h>
 #include <system_error>
@@ -80,7 +80,15 @@ MetalBinaryArchive* MetalBinaryArchive::OpenOrCreate(MetalRenderer* mtlr, uint64
 	uint64 key = 0xcbf29ce484222325ull;
 	key = FoldValue(key, titleId);
 	key = FoldValue(key, titleVersion);
-	key = FoldValue(key, RendererShader::GeneratePrecompiledCacheId());
+	// The same inputs RendererShader::GeneratePrecompiledCacheId() folds, built here
+	// rather than by calling it, because that function is protected and this is not a
+	// RendererShader. Duplicating three version macros is a smaller price than either
+	// widening its access or inheriting from a shader class to borrow one number.
+	key = FoldString(key, EMULATOR_VERSION_SUFFIX);
+	key = FoldValue(key, EMULATOR_VERSION_MAJOR);
+	key = FoldValue(key, EMULATOR_VERSION_MINOR);
+	key = FoldValue(key, EMULATOR_VERSION_PATCH);
+	key = FoldValue(key, (uint64)g_current_game_profile->GetAccurateShaderMul());
 	key = FoldValue(key, kMetalTranslatorVersion);
 	key = FoldString(key, gpuName);
 	key = FoldString(key, osBuild);
