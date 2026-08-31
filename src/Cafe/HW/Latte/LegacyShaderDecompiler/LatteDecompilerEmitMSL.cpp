@@ -4154,6 +4154,10 @@ void LatteDecompiler_emitMSLShader(LatteDecompilerShaderContext* shaderContext, 
 
           		// Output is defined as object payload
           		src->add("object_data VertexOut& out = objectPayload.vertexOut[tid];" _CRLF);
+                // Publish the primitive index for the mesh stage's streamout. One writer
+                // only: every thread in this threadgroup has the same tig, so letting all
+                // of them store it is a pointless write race on payload memory.
+                src->add("if (tid == 0) objectPayload.primitiveId = tig;" _CRLF);
             }
             else
             {
@@ -4289,7 +4293,13 @@ void LatteDecompiler_emitMSLShader(LatteDecompilerShaderContext* shaderContext, 
 
 				cemu_assert_debug(gsOutPrimType == 0); // currently we only properly handle GS output primitive points
 
-				src->addFmt("int sbBase{} = supportBuffer.streamoutBufferBase{}/4 + (gl_PrimitiveIDIn * {})*{};" _CRLF, i, i, maxVerticesInGS, shaderContext->output->streamoutBufferStride[i] / 4);
+				// gl_PrimitiveIDIn is a GLSL builtin and does not exist in Metal. This line
+				// was carried over verbatim from LatteDecompilerEmitGLSL.cpp (same statement,
+				// line 4089 there) when the Metal emitter was written, so every geometry
+				// shader that streams out failed to compile with "use of undeclared
+				// identifier 'gl_PrimitiveIDIn'". The object stage now puts the same value in
+				// the payload - see ObjectPayload in LatteDecompilerEmitMSLHeader.hpp.
+				src->addFmt("int sbBase{} = supportBuffer.streamoutBufferBase{}/4 + (objectPayload.primitiveId * {})*{};" _CRLF, i, i, maxVerticesInGS, shaderContext->output->streamoutBufferStride[i] / 4);
 			}
 		}
 
@@ -4416,7 +4426,13 @@ void LatteDecompiler_emitMSLShader(LatteDecompilerShaderContext* shaderContext, 
             if (shaderContext->contextRegisters[mmVGT_GS_OUT_PRIM_TYPE] == 1) // Line strip
             {
                 src->add("for (uint8_t i = 0; i < GET_PRIMITIVE_COUNT(vertexIndex) * 2; i++) {" _CRLF);
-                src->add("mesh.set_index(i, (i 2 3) + i % 2);" _CRLF);
+                // Was "(i 2 3)", which is not an expression in any language - upstream's
+                // own typo, present since the Metal backend's first commit (26e40a4b). It
+                // is emitted into the shader source, so it is a guaranteed compile failure
+                // for every geometry shader whose output is a line strip. The triangle-strip
+                // branch below has the shape this was meant to have: primitive i/2, vertex
+                // i%2 within it.
+                src->add("mesh.set_index(i, (i / 2) + i % 2);" _CRLF);
                 src->add("}" _CRLF);
             }
             else if (shaderContext->contextRegisters[mmVGT_GS_OUT_PRIM_TYPE] == 2) // Triangle strip
