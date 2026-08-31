@@ -115,10 +115,30 @@ final class DisplayRouter {
     func setDeviceScreen(_ screen: DeviceScreen) {
         guard deviceScreen != screen else { return }
         deviceScreen = screen
+        // Create the pad surface if this is the first time it has been asked for. Never
+        // destroys one - see syncPadSurface.
         syncPadSurface()
-        applyPlacement(reason: screen == .tv
-                       ? "the device was switched to the TV screen"
-                       : "the device was switched to the GamePad screen")
+        applyDeviceScreenVisibility()
+        log(screen == .tv
+            ? "showing the Wii U TV screen on this device"
+            : "showing the Wii U GamePad screen on this device")
+    }
+
+    /// Shows one of the two surfaces and hides the other. Deliberately NOT applyPlacement:
+    /// that recomputes the whole display arrangement and reparents the TV view, which is
+    /// far more than a screen swap needs and was part of what made repeated swapping
+    /// destroy the UI.
+    private func applyDeviceScreenVisibility() {
+        guard placement != .dualScreen, let container = deviceContainer else { return }
+        if deviceScreen == .gamepad, let pad = padRenderView, pad.superview === container {
+            pad.isHidden = false
+            container.bringSubviewToFront(pad)
+        } else {
+            padRenderView?.isHidden = true
+            if tvRenderViewStorage?.superview === container {
+                container.bringSubviewToFront(tvRenderView)
+            }
+        }
     }
 
     private init() {}
@@ -207,6 +227,10 @@ final class DisplayRouter {
     func titleStopped() {
         tvRenderViewStorage?.removeFromSuperview()
         tvRenderViewStorage = nil
+        // The only place the pad surface is released, now that swapping screens does not.
+        if cemu_bridge_has_pad_render_surface() {
+            cemu_bridge_release_pad_render_surface()
+        }
         padRenderView?.removeFromSuperview()
         padRenderView = nil
         externalWindow?.isHidden = true
@@ -259,21 +283,10 @@ final class DisplayRouter {
 
         syncPadSurface()
 
-        // Both surfaces keep rendering; only the order changes. That is what makes the
-        // swap instant and reversible - tearing the unused one down would mean rebuilding
-        // a CAMetalLayer on the way back, and the renderer holds a bare pointer into it
-        // from the GPU thread.
-        if placement != .dualScreen, let container = deviceContainer {
-            if deviceScreen == .gamepad, let pad = padRenderView, pad.superview === container {
-                container.bringSubviewToFront(pad)
-                pad.isHidden = false
-            } else if deviceScreen == .tv {
-                padRenderView?.isHidden = true
-                if tvRenderViewStorage?.superview === container {
-                    container.bringSubviewToFront(tvRenderView)
-                }
-            }
-        }
+        // A display arrangement change can reparent the TV view, so re-assert which of the
+        // two screens is in front afterwards. Same helper the swap button uses - one
+        // definition, so the two paths cannot drift into disagreeing about z-order.
+        applyDeviceScreenVisibility()
 
         if changed || !tvSurfaceRegistered {
             switch desired {
@@ -369,9 +382,23 @@ final class DisplayRouter {
             let scale = (container.window?.screen ?? UIScreen.main).effectiveRenderScale
             cemu_bridge_register_pad_render_surface(surface, Int32(size.width), Int32(size.height), scale)
         } else if !wantPad, havePad {
-            cemu_bridge_release_pad_render_surface()
+            // HIDDEN, NOT RELEASED. This used to release the surface, and that is what
+            // broke the UI when swapping screens repeatedly.
+            //
+            // cemu_bridge_release_pad_render_surface() drops the C++ side's retain and
+            // deliberately leaves the dead CAMetalLayer as a sublayer of this view - the
+            // renderer holds a bare pointer into it from the GPU thread and the layer has
+            // to outlive that. The documented cost is "one small view per connect/
+            // disconnect cycle", which is fine for plugging a display in and out and
+            // ruinous for a button somebody taps to look at their map: every tap left
+            // another dead Metal layer stacked in the container and built a fresh one on
+            // the way back.
+            //
+            // So the surface now lives for the title. It keeps rendering while hidden,
+            // which costs GPU time for a screen nobody is looking at - a real cost, and
+            // the right trade against a UI that falls apart after three taps. The release
+            // still happens, once, in titleStopped().
             padRenderView?.isHidden = true
-            padRenderView = nil
         }
     }
 
