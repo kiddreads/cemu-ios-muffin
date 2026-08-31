@@ -1414,20 +1414,16 @@ void MetalRenderer::draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 
 		const size_t outBytes = (size_t)primitiveCount * MTL_GS_MAX_VERTICES * gsVertexStride;
 		const size_t primCountBytes = (size_t)primitiveCount * sizeof(uint32);
 
+		// Bailing out the same way the drop path above does -- a bare return. Running the
+		// streamout prepare/finish pair on the way out would be new behaviour on a path
+		// that until now simply did not draw, and this is not the night to find out what
+		// else that touches.
 		if (primitiveCount == 0 || !payloadStride || !gsVertexStride || !vertexPipeline || !geometryPipeline)
-		{
-			// Nothing to draw, or the shader could not be built. Either way this draw
-			// contributes nothing and the render pass below has no work to do for it.
-			LatteStreamout_PrepareDrawcall(count, instanceCount);
-			LatteStreamout_FinishDrawcall(m_memoryManager->UseHostMemoryForCache());
 			return;
-		}
 		if (!EnsureGeometryEmulationBuffers(payloadBytes, outBytes, primCountBytes))
 		{
 			m_gsOversizedDraws++;
 			cemuLog_logOnce(LogType::Force, "Metal: a geometry-shader draw needed more scratch memory than emulation will allocate, so it is being skipped. Geometry from draws this large will be missing.");
-			LatteStreamout_PrepareDrawcall(count, instanceCount);
-			LatteStreamout_FinishDrawcall(m_memoryManager->UseHostMemoryForCache());
 			return;
 		}
 
@@ -1455,7 +1451,15 @@ void MetalRenderer::draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 
 		computeCommandEncoder->setBuffer(m_gsPayloadBuffer, 0, vertexShader->resourceMapping.gsPayloadBinding);
 		// Non-uniform threadgroup sizes are supported on every GPU that can run this
 		// backend, so the dispatch is sized exactly and the kernels need no bounds check.
-		computeCommandEncoder->dispatchThreads(MTL::Size(primitiveCount * verticesPerPrimitive, 1, 1), MTL::Size(std::min<uint32>(verticesPerPrimitive * 32u, 256u), 1, 1));
+		// The threadgroup width is clamped to what this particular pipeline will accept:
+		// a shader heavy enough on registers reports a lower ceiling than the device's,
+		// and asking for more than it allows is a hard Metal error rather than a warning.
+		{
+			const uint32 vertexThreads = primitiveCount * verticesPerPrimitive;
+			uint32 groupWidth = std::min<uint32>((uint32)vertexPipeline->maxTotalThreadsPerThreadgroup(), 256u);
+			groupWidth = std::max<uint32>(std::min<uint32>(groupWidth, vertexThreads), 1u);
+			computeCommandEncoder->dispatchThreads(MTL::Size(vertexThreads, 1, 1), MTL::Size(groupWidth, 1, 1));
+		}
 
 		// Stage 2: the geometry shader, one thread per primitive. Same encoder, so Metal
 		// orders it after stage 1 with no barrier of ours.
@@ -1464,7 +1468,11 @@ void MetalRenderer::draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 
 		computeCommandEncoder->setBuffer(m_gsPayloadBuffer, 0, geometryShader->resourceMapping.gsPayloadBinding);
 		computeCommandEncoder->setBuffer(m_gsOutBuffer, 0, geometryShader->resourceMapping.gsOutBinding);
 		computeCommandEncoder->setBuffer(m_gsPrimCountBuffer, 0, geometryShader->resourceMapping.gsPrimCountBinding);
-		computeCommandEncoder->dispatchThreads(MTL::Size(primitiveCount, 1, 1), MTL::Size(std::min<uint32>(primitiveCount, 256u), 1, 1));
+		{
+			uint32 groupWidth = std::min<uint32>((uint32)geometryPipeline->maxTotalThreadsPerThreadgroup(), 256u);
+			groupWidth = std::max<uint32>(std::min<uint32>(groupWidth, primitiveCount), 1u);
+			computeCommandEncoder->dispatchThreads(MTL::Size(primitiveCount, 1, 1), MTL::Size(groupWidth, 1, 1));
+		}
 
 		// Stage 3 is sized for the worst case, because how many vertices each invocation
 		// actually emitted is only known on the GPU. The passthrough shader clips the
@@ -1472,7 +1480,17 @@ void MetalRenderer::draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 
 		gsDrawVertexCount = primitiveCount * primsPerInvocation * verticesPerOutPrimitive;
 
 		m_gsEmulatedDraws++;
-		cemuLog_logOnce(LogType::Force, "Metal: emulating geometry shaders with compute passes - this GPU has no mesh shaders. Draws that used to be dropped are now being drawn.");
+		if (m_gsEmulatedDraws == 1)
+		{
+			// Everything needed to tell a layout mistake from a dispatch mistake, on the
+			// first draw, because the two look identical on screen -- geometry in the
+			// wrong place -- and reproducing this needs hardware that is not here. If the
+			// strides are wrong the vertices are read at the wrong offsets; if the counts
+			// are wrong the right vertices are drawn the wrong number of times.
+			cemuLog_log(LogType::Force, "Metal: geometry-shader emulation active. First draw: {} primitives, {} vertices per input primitive, gsOutPrimType {}, {} prims/invocation, {} vertices/out primitive, payload stride {} B, vertex stride {} B, drawing {} vertices",
+				primitiveCount, verticesPerPrimitive, gsOutPrimType, primsPerInvocation, verticesPerOutPrimitive,
+				payloadStride, gsVertexStride, primitiveCount * primsPerInvocation * verticesPerOutPrimitive);
+		}
 	}
 
 	// Render pass
