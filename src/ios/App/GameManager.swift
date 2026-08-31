@@ -6,7 +6,7 @@ import UIKit
 
 struct GameMetadata: Codable, Identifiable {
     let id: String
-    let title: String
+    var title: String
     let romPath: String
     let coverPath: String?
     let region: String
@@ -14,15 +14,19 @@ struct GameMetadata: Codable, Identifiable {
     let genre: String
     var isFavorite: Bool = false
 
-    enum CodingKeys: String, CodingKey {
-        case id, title, romPath, coverPath, region, releaseDate, genre
-    }
+    // No CodingKeys enum. There used to be one, and it listed every field EXCEPT
+    // isFavorite - so the one piece of per-game state the app actually had was the one
+    // piece that could never be written down. Favourites were lost on every restart
+    // because of those three lines. The synthesised conformance covers everything.
 }
 
 @MainActor
 class GameManager: ObservableObject {
     @Published var games: [GameMetadata] = []
-    @Published var favorites: [GameMetadata] = []
+    /// Derived, not maintained. It used to be a second stored array that toggleFavorite
+    /// appended to without checking, so toggling a game off and on twice could list it
+    /// twice. One source of truth removes that as a possibility rather than fixing it.
+    var favorites: [GameMetadata] { games.filter(\.isFavorite) }
     @Published var isLoading = false
     @Published var currentGame: GameMetadata?
     @Published var emulationState: EmulationState = .idle
@@ -37,7 +41,10 @@ class GameManager: ObservableObject {
     private var frameRateTimer: Timer?
 
     private let romsDirectory = "Roms"
-    private let gameListFile = "games.json"
+    /// Per-game state that the filesystem cannot carry - favourites, and the real title
+    /// name once something has looked inside the file. Replaces a `gameListFile =
+    /// "games.json"` constant that was declared and never referenced anywhere.
+    private let libraryStore = GameLibraryStore()
     private var emulationEngine: EmulationEngine?
     private var surfaceRegistered = false
 
@@ -113,8 +120,22 @@ class GameManager: ObservableObject {
                 discoveredGames.append(gameMetadata)
             }
 
+            // Merge in what the filesystem cannot tell us. The scan decides what EXISTS;
+            // the store only decorates it, so a corrupt or missing store costs a
+            // favourite and never a game.
+            libraryStore.load()
+            for index in discoveredGames.indices {
+                guard let annotation = libraryStore.annotation(for: discoveredGames[index].id) else { continue }
+                discoveredGames[index].isFavorite = annotation.isFavorite
+                if let name = annotation.titleName, !name.isEmpty {
+                    discoveredGames[index].title = name
+                }
+            }
+            // Anything whose file is gone loses its annotation, so a favourite cannot
+            // reattach itself to a different game imported under the same name later.
+            libraryStore.prune(toKeep: Set(discoveredGames.map(\.id)))
+
             self.games = discoveredGames.sorted { $0.title < $1.title }
-            self.favorites = self.games.filter { $0.isFavorite }
         } catch {
             print("Error scanning Roms directory: \(error)")
         }
@@ -343,15 +364,12 @@ class GameManager: ObservableObject {
     }
 
     func toggleFavorite(_ game: GameMetadata) {
-        if let index = games.firstIndex(where: { $0.id == game.id }) {
-            games[index].isFavorite.toggle()
+        guard let index = games.firstIndex(where: { $0.id == game.id }) else { return }
+        games[index].isFavorite.toggle()
 
-            if games[index].isFavorite {
-                favorites.append(games[index])
-            } else {
-                favorites.removeAll { $0.id == game.id }
-            }
-        }
+        var annotation = libraryStore.annotation(for: game.id) ?? GameAnnotation(id: game.id)
+        annotation.isFavorite = games[index].isFavorite
+        libraryStore.update(annotation)
     }
 
     func launchGame(_ game: GameMetadata) {
