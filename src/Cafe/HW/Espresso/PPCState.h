@@ -156,8 +156,27 @@ void PPCInterpreter_setCurrentInstance(PPCInterpreter_t* hCPU);
 
 uint64 PPCInterpreter_getMainCoreCycleCounter();
 
-void PPCInterpreter_nextInstruction(PPCInterpreter_t* cpuInterpreter);
-void PPCInterpreter_jumpToInstruction(PPCInterpreter_t* cpuInterpreter, uint32 newIP);
+// Defined here rather than in PPCInterpreterMain.cpp, which is what they used to be.
+//
+// There are ~230 calls to PPCInterpreter_nextInstruction and essentially every interpreter
+// handler ends in one - it is reached once per guest instruction executed. Out of line in
+// another translation unit, that is a cross-TU function call whose entire body is
+// `ip += 4`, and the call, the spill and the return dominate the work by a wide margin.
+//
+// Whether this was already being folded depends on link-time optimisation, which the
+// release build does enable - so on a build where LTO fires this changes nothing, and on
+// one where it does not it removes a call per instruction. It costs ten lines either way,
+// and the interpreter is the only CPU path available when JIT is unavailable, which is the
+// case this port has to be good at.
+inline void PPCInterpreter_nextInstruction(PPCInterpreter_t* cpuInterpreter)
+{
+	cpuInterpreter->instructionPointer += 4;
+}
+
+inline void PPCInterpreter_jumpToInstruction(PPCInterpreter_t* cpuInterpreter, uint32 newIP)
+{
+	cpuInterpreter->instructionPointer = (uint32)newIP;
+}
 
 void PPCInterpreterSlim_executeInstruction(PPCInterpreter_t* hCPU);
 void PPCInterpreterFull_executeInstruction(PPCInterpreter_t* hCPU);

@@ -31,9 +31,17 @@ private:
     std::map<uint64, PipelineObject*> m_pipelineCache;
     FSpinlock m_pipelineCacheLock;
 
-	std::thread* m_pipelineCacheStoreThread;
+	// Initialised, because both are READ as though they were null-initialised - the
+	// writer thread is started with `if (!m_pipelineCacheStoreThread)` and the file cache
+	// is checked with `if (!s_cache)` and asserted null on open. Neither had an
+	// initialiser, so those reads were of an indeterminate value: undefined behaviour that
+	// in practice means the writer thread might never start, or a garbage pointer gets
+	// treated as a live FileCache.
+	std::thread* m_pipelineCacheStoreThread{nullptr};
 
-	class FileCache* s_cache;
+	// Keeps the s_ name it has everywhere else in the .cpp; it is a member, not a static,
+	// and the misleading prefix is very likely why it was written without an initialiser.
+	class FileCache* s_cache{nullptr};
 
 	std::atomic_uint32_t m_numCompilationThreads{ 0 };
 	ConcurrentQueue<std::vector<uint8>> m_compilationQueue;

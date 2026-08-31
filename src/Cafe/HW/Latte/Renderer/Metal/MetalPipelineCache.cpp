@@ -115,11 +115,30 @@ MetalPipelineCache::~MetalPipelineCache()
 PipelineObject* MetalPipelineCache::GetRenderPipelineState(const LatteFetchShader* fetchShader, const LatteDecompilerShader* vertexShader, const LatteDecompilerShader* geometryShader, const LatteDecompilerShader* pixelShader, const MetalAttachmentsInfo& lastUsedAttachmentsInfo, const MetalAttachmentsInfo& activeAttachmentsInfo, Vector2i extend, uint32 indexCount, const LatteContextRegister& lcr)
 {
     uint64 hash = CalculatePipelineHash(fetchShader, vertexShader, geometryShader, pixelShader, lastUsedAttachmentsInfo, activeAttachmentsInfo, lcr);
-    PipelineObject*& pipelineObj = m_pipelineCache[hash];
-    if (pipelineObj)
-        return pipelineObj;
 
-    pipelineObj = new PipelineObject();
+    // Under the lock, and note this was an INSERT rather than a lookup: `m_pipelineCache[hash]`
+    // default-constructs an entry when the key is absent, so this function mutated the map
+    // every time it missed. Meanwhile LoadPipelineFromCache writes the same std::map from N
+    // compiler threads while holding m_pipelineCacheLock. Concurrent mutation of a std::map
+    // is a data race whatever the values are; the window is narrow but real, and it is the
+    // load-time compiler threads racing the Latte thread's first draws.
+    //
+    // The lock is released before compiling. Compilation is synchronous and takes hundreds
+    // of milliseconds, and FSpinlock would have a core busy-waiting for all of it.
+    // Publishing the PipelineObject before its m_pipeline is filled in is already the
+    // contract the async path relies on - the draw site checks `if (!pipelineObj->m_pipeline)`
+    // and skips - so this changes nothing about that.
+    m_pipelineCacheLock.lock();
+    auto pipelineIt = m_pipelineCache.find(hash);
+    if (pipelineIt != m_pipelineCache.end())
+    {
+        PipelineObject* existing = pipelineIt->second;
+        m_pipelineCacheLock.unlock();
+        return existing;
+    }
+    PipelineObject* pipelineObj = new PipelineObject();
+    m_pipelineCache[hash] = pipelineObj;
+    m_pipelineCacheLock.unlock();
 
     MetalPipelineCompiler* compiler = new MetalPipelineCompiler(m_mtlr, *pipelineObj);
     compiler->InitFromState(fetchShader, vertexShader, geometryShader, pixelShader, lastUsedAttachmentsInfo, activeAttachmentsInfo, lcr);
