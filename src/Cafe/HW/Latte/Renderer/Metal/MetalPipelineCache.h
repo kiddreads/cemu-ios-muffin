@@ -43,6 +43,10 @@ private:
 	// and the misleading prefix is very likely why it was written without an initialiser.
 	class FileCache* s_cache{nullptr};
 
+	// Guards s_cache against the detached WorkerThread, which reads it and calls
+	// AddFileAsync on it while Close() deletes it.
+	std::mutex m_fileCacheMutex;
+
 	std::atomic_uint32_t m_numCompilationThreads{ 0 };
 	ConcurrentQueue<std::vector<uint8>> m_compilationQueue;
 	std::atomic_uint32_t m_compilationCount;
