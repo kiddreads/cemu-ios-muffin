@@ -53,6 +53,26 @@ struct OptimizedControlPanel: View {
     // which control scheme is on.
     @AppStorage(ControllerLayoutSettings.joystickKey)
     private var joystickMode = ControllerLayoutSettings.defaultJoystick
+    @AppStorage(ControllerLayoutSettings.showTriggersKey)
+    private var showTriggers = ControllerLayoutSettings.defaultShowTriggers
+    @AppStorage(ControllerLayoutSettings.showHomeKey)
+    private var showHome = ControllerLayoutSettings.defaultShowHome
+
+    /// Drops the controls the user has switched off.
+    ///
+    /// Filtered here rather than in ControllerGeometry so the layout stays a single
+    /// description of where things are on a real GamePad, and what is DRAWN stays a
+    /// separate question. A hidden control also stops hit-testing, because a button you
+    /// cannot see that still eats touches is worse than one you can.
+    private func visible(_ controls: [ControllerGeometry.Control]) -> [ControllerGeometry.Control] {
+        controls.filter { control in
+            switch control.id {
+            case "ZL", "ZR": return showTriggers
+            case "HOME": return showHome
+            default: return true
+            }
+        }
+    }
 
     var body: some View {
         // The automatic half of "adjustable + automatic sizing": GeometryReader re-runs
@@ -68,9 +88,9 @@ struct OptimizedControlPanel: View {
                     // The only difference between the two schemes. The right cluster,
                     // both anchors and every offset are shared, so switching modes
                     // swaps the d-pad for a stick and disturbs nothing else.
-                    controls: joystickMode
+                    controls: visible(joystickMode
                         ? ControllerGeometry.leftClusterJoystick
-                        : ControllerGeometry.leftCluster,
+                        : ControllerGeometry.leftCluster),
                     edge: .leading,
                     skin: skin,
                     unit: unit,
@@ -83,7 +103,7 @@ struct OptimizedControlPanel: View {
                 )
 
                 ControlCluster(
-                    controls: ControllerGeometry.rightCluster,
+                    controls: visible(ControllerGeometry.rightCluster),
                     edge: .trailing,
                     skin: skin,
                     unit: unit,
@@ -274,6 +294,9 @@ private struct ControlCluster: View {
 
 /// One control, drawn and held.
 private struct ControlButton: View {
+    @AppStorage(ControllerLayoutSettings.startSelectLabelsKey)
+    private var showStartSelectLabels = ControllerLayoutSettings.defaultStartSelectLabels
+
     let control: ControllerGeometry.Control
     let skin: WiiUControllerSkin
     let unit: CGFloat
@@ -299,6 +322,19 @@ private struct ControlButton: View {
             .frame(width: size.width, height: size.height)
             .scaleEffect(isPressed ? 0.94 : 1.0)
             .animation(.easeInOut(duration: 0.05), value: isPressed)
+            // START under +, SELECT under -, as the console prints them. An overlay
+            // rather than a VStack so the word cannot change the button's own size or
+            // shift it off the position the layout put it at - it is a label on the pad,
+            // not part of the control.
+            .overlay(alignment: .bottom) {
+                if showStartSelectLabels, let subLabel = control.subLabel {
+                    Text(subLabel)
+                        .font(.system(size: max(size.height * 0.30, 7), weight: .semibold, design: .rounded))
+                        .foregroundColor(labelColor.opacity(0.85))
+                        .fixedSize()
+                        .offset(y: size.height * 0.62)
+                }
+            }
         }
         .allowsHitTesting(isInteractive)
     }
@@ -514,7 +550,16 @@ private struct JoystickControl: View {
     /// centre of the left cluster; R3 still has its own, in the middle of A/B/X/Y, so a
     /// tap on the camera stick has nothing to mean and is better off meaning nothing than
     /// firing a second control that is already on screen.
-    private var clickButton: String? { control.id == "stickL" ? "L3" : nil }
+    private var clickButton: String? {
+        switch control.id {
+        case "stickL": return "L3"
+        case "stickR": return "R3"
+        default: return nil
+        }
+    }
+
+    /// The pending hold-to-click, cancelled the moment the thumb moves or lifts.
+    @State private var holdClick: DispatchWorkItem?
 
     /// The settings, held to their declared ranges. UserDefaults is writable by anything
     /// on the device and survives a downgrade, so a value from outside the range the
@@ -614,15 +659,29 @@ private struct JoystickControl: View {
                     // every press of the stick would count as a push and L3 would become
                     // unreachable at the setting people who want precision will pick.
                     if deflection > ControllerGeometry.stickClickThreshold {
+                        // Steering, not clicking. Cancel any pending hold - a thumb that
+                        // is moving the stick is not pressing it in.
                         pushed = true
+                        holdClick?.cancel()
+                        holdClick = nil
+                    } else if holdClick == nil && !pushed {
+                        // Rest the thumb on the stick and it clicks in, the way pushing
+                        // straight down does on the console. A touchscreen has no
+                        // pressure axis, so the gesture is borrowed from time instead.
+                        let work = DispatchWorkItem { click() }
+                        holdClick = work
+                        DispatchQueue.main.asyncAfter(
+                            deadline: .now() + ControllerGeometry.stickClickHoldSeconds,
+                            execute: work)
                     }
                     report(deflection: deflection, dx: dx, dy: dy, distance: distance)
                 }
                 .onEnded { _ in
-                    // A press that never deflected the stick is the click. It is the one
-                    // gesture a stick has spare, and L3 would otherwise be lost in this
-                    // mode - the centre dot it used to live on is where the knob is now.
-                    if !pushed { click() }
+                    // Lifting before the hold completes cancels it. A stick you touched
+                    // and let go of has not been clicked - if it had, every brush of the
+                    // thumb would fire L3.
+                    holdClick?.cancel()
+                    holdClick = nil
                     recentre()
                 }
         )
@@ -631,6 +690,8 @@ private struct JoystickControl: View {
         // worse than a stuck button: the title keeps walking and nothing on screen is lit
         // up to explain why.
         .onDisappear {
+            holdClick?.cancel()
+            holdClick = nil
             clickRelease?.cancel()
             clickRelease = nil
             if let clickButton { onInput(clickButton, false) }

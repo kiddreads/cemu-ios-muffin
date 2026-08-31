@@ -54,6 +54,12 @@ struct SettingsView: View {
     // which control scheme is on.
     @AppStorage(ControllerLayoutSettings.joystickKey)
     private var joystickMode = ControllerLayoutSettings.defaultJoystick
+    @AppStorage(ControllerLayoutSettings.showTriggersKey)
+    private var showTriggers = ControllerLayoutSettings.defaultShowTriggers
+    @AppStorage(ControllerLayoutSettings.showHomeKey)
+    private var showHome = ControllerLayoutSettings.defaultShowHome
+    @AppStorage(ControllerLayoutSettings.startSelectLabelsKey)
+    private var startSelectLabels = ControllerLayoutSettings.defaultStartSelectLabels
     @AppStorage(ControllerLayoutSettings.deadzoneKey)
     private var stickDeadzone = ControllerLayoutSettings.defaultDeadzone
     @AppStorage(ControllerLayoutSettings.stickCurveKey)
@@ -85,6 +91,36 @@ struct SettingsView: View {
                     }
 
                     Section {
+                        Toggle(isOn: $showTriggers) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Show ZL and ZR")
+                                Text("The two rear triggers. Real GamePad buttons that plenty of titles need, but they sit where a thumb resting on a shoulder button lands.")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .tint(MuffinTheme.pixelBlue)
+
+                        Toggle(isOn: $showHome) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Show HOME")
+                                Text("Reaches the game, but does not open a Home Menu - Muffin does not emulate one. Off by default for that reason.")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .tint(MuffinTheme.pixelBlue)
+
+                        Toggle(isOn: $startSelectLabels) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Label + and - as START and SELECT")
+                                Text("Printed underneath them, the way the console prints them.")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .tint(MuffinTheme.pixelBlue)
+
                         Toggle(isOn: $joystickMode) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Joystick instead of d-pad")

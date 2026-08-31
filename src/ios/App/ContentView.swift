@@ -1002,6 +1002,12 @@ private func cemuBridgeButton(forLabel label: String) -> CemuBridgeButton {
     case "plus":  return CEMU_BRIDGE_BUTTON_PLUS
     case "minus": return CEMU_BRIDGE_BUTTON_MINUS
 
+    // The Wii U Home Menu is not emulated, so this reaches the title rather than opening
+    // anything - which is right: a title that watches for HOME to pause itself should
+    // still see it. Off by default in Settings for exactly the reason it does less than
+    // the console's does.
+    case "HOME": return CEMU_BRIDGE_BUTTON_HOME
+
     // The stick clicks. In d-pad mode these are the two small grey dots in the middle
     // of each cluster; in joystick mode the left one is a tap on the stick itself, which
     // is where L3 went when the knob took the dot's place. The bridge now has a real
