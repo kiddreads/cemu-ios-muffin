@@ -366,6 +366,40 @@ void cemu_bridge_set_button_state(CemuBridgeButton button, bool pressed);
 //
 // Pass touched=false on end/cancel. Coordinates are ignored then and the last position is
 // deliberately kept - some titles read the coordinates after the touch is released.
+// Converting an encrypted disc image into a decrypted .wua, on the device.
+//
+// A .wud or .wux needs a matching key from the user's keys.txt every time it is opened.
+// The .wua this produces is decrypted, roughly a third to a half the size, opens with no
+// keys at all, and is a single file. Muffin implements no cryptography to do it - the
+// engine already decrypts these formats to READ them, and this writes out what it reads.
+//
+// Runs on its own 16 MB-stack thread. One at a time: it is disk-bound and the device has
+// one disk. Start returns 0 if another is already running.
+typedef struct {
+    int stage;                              // mirrors WuaWriter::Stage
+    unsigned int totalFileCount;
+    unsigned int currentFileIndex;
+    unsigned long long totalInputBytes;
+    unsigned long long transferredInputBytes;
+} IOSConvertProgress;
+
+int  cemu_bridge_convert_to_wua_start(const char* sourcePath, const char* outputPath);
+void cemu_bridge_convert_to_wua_poll(IOSConvertProgress* out);
+void cemu_bridge_convert_to_wua_cancel(void);
+/// -1 while running, 0 succeeded, 1 failed. On failure errBuf receives a sentence meant
+/// for a person, not an error code.
+int  cemu_bridge_convert_to_wua_result(char* errBuf, int errBufLen);
+
+/// Whether compiled GPU pipelines are kept on disk between launches.
+///
+/// On by default. Without it every launch re-translates every shader to Metal and
+/// recompiles every pipeline from scratch, which is the loading screen - with it, that
+/// work is done once per title per device. A switch exists because it is new, it writes
+/// a file that can grow, and being able to turn it off without waiting for a build is
+/// worth more than the tidiness of not having the setting.
+void cemu_bridge_set_pipeline_cache_enabled(bool enabled);
+bool cemu_bridge_pipeline_cache_enabled(void);
+
 void cemu_bridge_set_touch(bool touched, float x, float y);
 
 void cemu_bridge_release_all_buttons(void);

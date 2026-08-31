@@ -488,6 +488,8 @@ add_library(CemuCafe
   TitleList/TitleInfo.h
   TitleList/TitleList.cpp
   TitleList/TitleList.h
+  TitleList/WuaWriter.cpp
+  TitleList/WuaWriter.h
 )
 
 # OpenGL stays desktop-only: iOS has no GL context to give it and ENABLE_OPENGL is

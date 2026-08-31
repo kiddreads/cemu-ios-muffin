@@ -474,6 +474,7 @@ void cemu_bridge_start_memory_watchdog(void) {
     #include "audio/IAudioAPI.h"
     #include "Cafe/HW/Espresso/PPCState.h"
     #include "Cafe/HW/Espresso/Recompiler/PPCRecompiler.h"
+    #include "Cafe/HW/Latte/Renderer/Metal/MetalBinaryArchive.h"
     #include "Common/version.h"
     #include <filesystem>
     #include <set>
@@ -508,6 +509,12 @@ void cemu_bridge_start_memory_watchdog(void) {
     void IOSInput_SetButtonState(int button, bool pressed);
     void IOSInput_SetStickAxis(int stick, float x, float y);
     void IOSInput_SetTouch(bool touched, float x, float y);
+
+    // Defined in src/gui/iosgui/IOSTitleConvert.cpp.
+    int  IOSTitleConvert_Start(const char* sourcePath, const char* outputPath);
+    void IOSTitleConvert_Poll(struct IOSConvertProgress* out);
+    void IOSTitleConvert_Cancel(void);
+    int  IOSTitleConvert_Result(char* errBuf, int errBufLen);
     void IOSInput_ReleaseAllButtons();
 
     // Defined in src/gui/iosgui/IOSTitleLaunch.cpp - the real-title launch path, kept on
@@ -1986,6 +1993,52 @@ void cemu_bridge_set_stick_axis(CemuBridgeStick stick, float x, float y) {
     IOSInput_SetStickAxis((int)stick, x, y);
 #else
     (void)stick; (void)x; (void)y;
+#endif
+}
+
+int cemu_bridge_convert_to_wua_start(const char* sourcePath, const char* outputPath) {
+#if defined(CEMU_CORE_AVAILABLE)
+    return IOSTitleConvert_Start(sourcePath, outputPath);
+#else
+    (void)sourcePath; (void)outputPath; return 0;
+#endif
+}
+
+void cemu_bridge_convert_to_wua_poll(IOSConvertProgress* out) {
+#if defined(CEMU_CORE_AVAILABLE)
+    IOSTitleConvert_Poll(out);
+#else
+    (void)out;
+#endif
+}
+
+void cemu_bridge_convert_to_wua_cancel(void) {
+#if defined(CEMU_CORE_AVAILABLE)
+    IOSTitleConvert_Cancel();
+#endif
+}
+
+int cemu_bridge_convert_to_wua_result(char* errBuf, int errBufLen) {
+#if defined(CEMU_CORE_AVAILABLE)
+    return IOSTitleConvert_Result(errBuf, errBufLen);
+#else
+    (void)errBuf; (void)errBufLen; return 1;
+#endif
+}
+
+void cemu_bridge_set_pipeline_cache_enabled(bool enabled) {
+#if defined(CEMU_CORE_AVAILABLE)
+    MetalBinaryArchive::SetEnabled(enabled);
+#else
+    (void)enabled;
+#endif
+}
+
+bool cemu_bridge_pipeline_cache_enabled(void) {
+#if defined(CEMU_CORE_AVAILABLE)
+    return MetalBinaryArchive::IsEnabled();
+#else
+    return false;
 #endif
 }
 
