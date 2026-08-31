@@ -93,7 +93,9 @@ MetalBinaryArchive* MetalBinaryArchive::OpenOrCreate(MetalRenderer* mtlr, uint64
 	key = FoldString(key, gpuName);
 	key = FoldString(key, osBuild);
 	// Capability bits, because they change which code path built the descriptor.
-	key = FoldValue(key, (uint64)mtlr->IsAppleGPU() | ((uint64)mtlr->SupportsMeshShaders() << 1));
+	// Geometry-shader emulation changes the generated MSL for every shader in a title
+	// that uses one, so an archive built with it on describes different pipelines.
+	key = FoldValue(key, (uint64)mtlr->IsAppleGPU() | ((uint64)mtlr->SupportsMeshShaders() << 1) | ((uint64)mtlr->UseGeometryShaderEmulation() << 2));
 	// Compile options that change the AIR, and therefore every function identity. A
 	// mismatch here would already be a guaranteed miss; including them just stops us
 	// carrying an archive full of permanently-dead entries.

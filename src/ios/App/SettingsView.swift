@@ -68,6 +68,9 @@ struct SettingsView: View {
     /// On by default. Mirrored into the engine on change and at appear, because the
     /// engine reads it once when a title opens its cache and cannot see UserDefaults.
     @AppStorage("muffin.pipelineCacheEnabled") private var pipelineCacheEnabled = true
+    // Off by default on purpose: it is new, it only matters on older hardware, and a
+    // build nobody can install is worse than a feature nobody turned on.
+    @AppStorage("muffin.geometryShaderEmulation") private var geometryShaderEmulation = false
     @AppStorage(ControllerLayoutSettings.deadzoneKey)
     private var stickDeadzone = ControllerLayoutSettings.defaultDeadzone
     @AppStorage(ControllerLayoutSettings.stickCurveKey)
@@ -349,6 +352,19 @@ struct SettingsView: View {
                         .tint(MuffinTheme.pixelBlue)
                         .onChange(of: pipelineCacheEnabled) { newValue in
                             cemu_bridge_set_pipeline_cache_enabled(newValue)
+                        }
+
+                        Toggle(isOn: $geometryShaderEmulation) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Draw geometry-shader effects (experimental)")
+                                Text("On an iPad before the 2020 A13 models, the GPU has no mesh shaders, and this emulator could only run a Wii U geometry shader through those - so those draws were thrown away and the effects they make simply never appeared. This rebuilds them out of compute passes instead. Start the game again after changing this.")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .tint(MuffinTheme.pixelBlue)
+                        .onChange(of: geometryShaderEmulation) { newValue in
+                            cemu_bridge_set_geometry_shader_emulation_enabled(newValue)
                         }
                     } header: {
                         Text("Performance")

@@ -410,6 +410,12 @@ int  cemu_bridge_convert_to_wua_result(char* errBuf, int errBufLen);
 void cemu_bridge_set_pipeline_cache_enabled(bool enabled);
 bool cemu_bridge_pipeline_cache_enabled(void);
 
+// Geometry-shader emulation. Only does anything on a GPU without mesh shaders, and only
+// takes effect for titles started afterwards -- the choice is compiled into every shader
+// the session generates.
+void cemu_bridge_set_geometry_shader_emulation_enabled(bool enabled);
+bool cemu_bridge_geometry_shader_emulation_enabled(void);
+
 void cemu_bridge_set_touch(bool touched, float x, float y);
 
 void cemu_bridge_release_all_buttons(void);

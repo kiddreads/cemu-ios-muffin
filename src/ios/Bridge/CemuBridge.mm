@@ -2042,6 +2042,22 @@ bool cemu_bridge_pipeline_cache_enabled(void) {
 #endif
 }
 
+void cemu_bridge_set_geometry_shader_emulation_enabled(bool enabled) {
+#if defined(CEMU_CORE_AVAILABLE)
+    MetalRenderer::SetGeometryShaderEmulationEnabled(enabled);
+#else
+    (void)enabled;
+#endif
+}
+
+bool cemu_bridge_geometry_shader_emulation_enabled(void) {
+#if defined(CEMU_CORE_AVAILABLE)
+    return MetalRenderer::GeometryShaderEmulationEnabled();
+#else
+    return false;
+#endif
+}
+
 void cemu_bridge_set_touch(bool touched, float x, float y) {
 #if defined(CEMU_CORE_AVAILABLE)
     IOSInput_SetTouch(touched, x, y);

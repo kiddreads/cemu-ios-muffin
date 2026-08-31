@@ -240,6 +240,8 @@ RendererShaderMtl::~RendererShaderMtl()
 {
     if (m_function)
         m_function->release();
+    if (m_passthroughFunction)
+        m_passthroughFunction->release();
 }
 
 void RendererShaderMtl::PreponeCompilation(bool isRenderThread)
@@ -364,6 +366,9 @@ void RendererShaderMtl::CompileInternal()
     }
 
     m_function = library->newFunction(ToNSString("main0"));
+    // Absent unless this is an emulated geometry shader, so a null here is normal and not
+    // a failure worth logging.
+    m_passthroughFunction = library->newFunction(ToNSString("gsPassthroughVS"));
     library->release();
 
 	// Count shader compilation
