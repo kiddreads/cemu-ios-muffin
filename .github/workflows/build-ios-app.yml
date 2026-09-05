@@ -121,6 +121,45 @@ jobs:
             -configuration Release CODE_SIGNING_ALLOWED=NO build \
             2>&1 | tee ../../xcodebuild.log
 
+      - name: Stamp a distinguishable build name and version
+        # WHY: every build shipped as CFBundleName "Cemu" with CFBundleShortVersionString
+        # 0.1.0, so in LiveContainer and SideStore every version ever installed looked
+        # identical and Brandon could not tell which build was which. That is what he meant
+        # by LiveContainer being "very unorganized" - it was our packaging, not his setup.
+        # Verified by unzipping the SHIPPED v38 IPA and reading its Info.plist, not by
+        # reading the project files.
+        #
+        # CFBundleIdentifier is deliberately NOT changed. It keys the app's data container,
+        # so changing it would orphan his saves and mlc directory - a far worse problem than
+        # ambiguous names.
+        run: |
+          set -eo pipefail
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -type d -name "Cemu.app" -path "*Release-iphoneos*" | head -n1)
+          PL="$APP_PATH/Info.plist"
+          TAG="${{ inputs.release_tag }}"
+          if [ -z "$TAG" ]; then TAG="${GITHUB_REF_NAME}-$(echo "$GITHUB_SHA" | cut -c1-7)"; fi
+          # Numeric version where the tag gives one, else the run number - never empty.
+          VER=$(echo "$TAG" | sed -nE 's/^v?([0-9]+).*/\1/p')
+          if [ -z "$VER" ]; then VER="${GITHUB_RUN_NUMBER}"; fi
+          # Home-screen label. Must be SHORT and must not contain a slash: an icon caption
+          # gets a handful of characters, and a branch name like feat/foo-v2 both overflows
+          # and truncates mid-word. Tested against real tag and branch inputs rather than
+          # assumed - "Muffin 38-geometry-rect" was the first attempt and it was unusable.
+          if echo "$TAG" | grep -qE '^v?[0-9]+'; then
+            LABEL="v$VER"
+          else
+            LABEL="$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          pb() { /usr/libexec/PlistBuddy "$@"; }
+          pb -c "Set :CFBundleDisplayName Muffin $LABEL" "$PL" 2>/dev/null \
+            || pb -c "Add :CFBundleDisplayName string Muffin $LABEL" "$PL"
+          pb -c "Set :CFBundleShortVersionString $VER" "$PL" 2>/dev/null \
+            || pb -c "Add :CFBundleShortVersionString string $VER" "$PL"
+          pb -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" "$PL" 2>/dev/null \
+            || pb -c "Add :CFBundleVersion string ${GITHUB_RUN_NUMBER}" "$PL"
+          echo "stamped display name: $(pb -c 'Print :CFBundleDisplayName' "$PL")"
+          echo "stamped version:      $(pb -c 'Print :CFBundleShortVersionString' "$PL")"
+
       - name: Package unsigned IPA
         # SideStore/AltStore re-sign with the user's own Apple ID at install time, so
         # an unsigned .app (CODE_SIGNING_ALLOWED=NO above) is enough - it just needs
