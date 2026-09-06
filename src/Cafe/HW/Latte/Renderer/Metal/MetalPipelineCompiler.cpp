@@ -17,7 +17,7 @@ extern std::atomic_int g_compiling_pipelines;
 extern std::atomic_int g_compiling_pipelines_async;
 extern std::atomic_uint64_t g_compiling_pipelines_syncTimeSum;
 
-static void rectsEmulationGS_outputSingleVertex(std::string& gsSrc, const LatteDecompilerShader* vertexShader, LatteShaderPSInputTable& psInputTable, sint32 vIdx, const LatteContextRegister& latteRegister)
+static void rectsEmulationGS_outputSingleVertex(std::string& gsSrc, const LatteDecompilerShader* vertexShader, LatteShaderPSInputTable& psInputTable, sint32 vIdx, const LatteContextRegister& latteRegister, bool computeVariant)
 {
 	auto parameterMask = vertexShader->outputParameterMask;
 	for (uint32 i = 0; i < 32; i++)
@@ -33,10 +33,16 @@ static void rectsEmulationGS_outputSingleVertex(std::string& gsSrc, const LatteD
 		gsSrc.append(fmt::format("out.passParameterSem{} = objectPayload.vertexOut[{}].passParameterSem{};\r\n", vsSemanticId, vIdx, vsSemanticId));
 	}
 	gsSrc.append(fmt::format("out.position = objectPayload.vertexOut[{}].position;\r\n", vIdx));
-	gsSrc.append(fmt::format("mesh.set_vertex({}, out);\r\n", vIdx));
+	// Mesh writes straight into the mesh object; compute has no mesh, so the vertex is
+	// parked in a local array and expanded into the device buffer once the winding branch
+	// has picked which corners form the two triangles.
+	if (computeVariant)
+		gsSrc.append(fmt::format("verts[{}] = out;\r\n", vIdx));
+	else
+		gsSrc.append(fmt::format("mesh.set_vertex({}, out);\r\n", vIdx));
 }
 
-static void rectsEmulationGS_outputGeneratedVertex(std::string& gsSrc, const LatteDecompilerShader* vertexShader, LatteShaderPSInputTable& psInputTable, const char* variant, const LatteContextRegister& latteRegister)
+static void rectsEmulationGS_outputGeneratedVertex(std::string& gsSrc, const LatteDecompilerShader* vertexShader, LatteShaderPSInputTable& psInputTable, const char* variant, const LatteContextRegister& latteRegister, bool computeVariant)
 {
 	auto parameterMask = vertexShader->outputParameterMask;
 	for (uint32 i = 0; i < 32; i++)
@@ -52,29 +58,57 @@ static void rectsEmulationGS_outputGeneratedVertex(std::string& gsSrc, const Lat
 		gsSrc.append(fmt::format("out.passParameterSem{} = gen4thVertex{}(objectPayload.vertexOut[0].passParameterSem{}, objectPayload.vertexOut[1].passParameterSem{}, objectPayload.vertexOut[2].passParameterSem{});\r\n", vsSemanticId, variant, vsSemanticId, vsSemanticId, vsSemanticId));
 	}
 	gsSrc.append(fmt::format("out.position = gen4thVertex{}(objectPayload.vertexOut[0].position, objectPayload.vertexOut[1].position, objectPayload.vertexOut[2].position);\r\n", variant));
-	gsSrc.append(fmt::format("mesh.set_vertex(3, out);\r\n"));
+	if (computeVariant)
+		gsSrc.append("verts[3] = out;\r\n");
+	else
+		gsSrc.append("mesh.set_vertex(3, out);\r\n");
 }
 
-static void rectsEmulationGS_outputVerticesCode(std::string& gsSrc, const LatteDecompilerShader* vertexShader, LatteShaderPSInputTable& psInputTable, sint32 p0, sint32 p1, sint32 p2, sint32 p3, const char* variant, const LatteContextRegister& latteRegister)
+static void rectsEmulationGS_outputVerticesCode(std::string& gsSrc, const LatteDecompilerShader* vertexShader, LatteShaderPSInputTable& psInputTable, sint32 p0, sint32 p1, sint32 p2, sint32 p3, const char* variant, const LatteContextRegister& latteRegister, bool computeVariant)
 {
 	sint32 pList[4] = { p0, p1, p2, p3 };
 	for (sint32 i = 0; i < 4; i++)
 	{
 		if (pList[i] == 3)
-			rectsEmulationGS_outputGeneratedVertex(gsSrc, vertexShader, psInputTable, variant, latteRegister);
+			rectsEmulationGS_outputGeneratedVertex(gsSrc, vertexShader, psInputTable, variant, latteRegister, computeVariant);
 		else
-			rectsEmulationGS_outputSingleVertex(gsSrc, vertexShader, psInputTable, pList[i], latteRegister);
+			rectsEmulationGS_outputSingleVertex(gsSrc, vertexShader, psInputTable, pList[i], latteRegister, computeVariant);
 	}
-	gsSrc.append(fmt::format("mesh.set_index(0, {});\r\n", pList[0]));
-	gsSrc.append(fmt::format("mesh.set_index(1, {});\r\n", pList[1]));
-	gsSrc.append(fmt::format("mesh.set_index(2, {});\r\n", pList[2]));
-	gsSrc.append(fmt::format("mesh.set_index(3, {});\r\n", pList[1]));
-	gsSrc.append(fmt::format("mesh.set_index(4, {});\r\n", pList[2]));
-	gsSrc.append(fmt::format("mesh.set_index(5, {});\r\n", pList[3]));
+	// The mesh path emits four vertices plus an index list. There is no index buffer on the
+	// emulated path -- the passthrough vertex shader reads the output buffer linearly by
+	// vertex id -- and WHICH corners the indices name is decided by a runtime winding
+	// branch, so the passthrough cannot know it statically. The six vertices are therefore
+	// written out already expanded, in final triangle order. Six writes instead of four is
+	// a trivial cost next to carrying an index buffer through the emulated path.
+	if (computeVariant)
+	{
+		static const sint32 kTriIdx[6] = { 0, 1, 2, 1, 2, 3 };
+		for (sint32 i = 0; i < 6; i++)
+			gsSrc.append(fmt::format("dst[{}] = verts[{}];\r\n", i, pList[kTriIdx[i]]));
+	}
+	else
+	{
+    	gsSrc.append(fmt::format("mesh.set_index(0, {});\r\n", pList[0]));
+    	gsSrc.append(fmt::format("mesh.set_index(1, {});\r\n", pList[1]));
+    	gsSrc.append(fmt::format("mesh.set_index(2, {});\r\n", pList[2]));
+    	gsSrc.append(fmt::format("mesh.set_index(3, {});\r\n", pList[1]));
+    	gsSrc.append(fmt::format("mesh.set_index(4, {});\r\n", pList[2]));
+    	gsSrc.append(fmt::format("mesh.set_index(5, {});\r\n", pList[3]));
+	}
 }
 
-static RendererShaderMtl* rectsEmulationGS_generate(MetalRenderer* metalRenderer, const LatteDecompilerShader* vertexShader, const LatteContextRegister& latteRegister)
+// outVertexStride is only written on the emulated path, where the draw path needs to know
+// how wide one output vertex is in order to size the scratch buffer. Nothing else can work
+// it out: this shader's layout is generated here rather than decompiled, so there is no
+// LatteDecompilerShader carrying an mtlGsVertexStride for it.
+static RendererShaderMtl* rectsEmulationGS_generate(MetalRenderer* metalRenderer, const LatteDecompilerShader* vertexShader, const LatteContextRegister& latteRegister, uint32* outVertexStride = nullptr)
 {
+	// A RECTS primitive needs the mesh pipeline for the same reason a real geometry shader
+	// does, so on a GPU without mesh shaders it gets the same treatment: the stage is
+	// generated as a compute kernel instead, and a passthrough vertex shader rasterizes
+	// what it wrote.
+	const bool computeVariant = !metalRenderer->SupportsMeshShaders() && metalRenderer->UseGeometryShaderEmulation();
+	uint32 exportedParamCount = 0;
 	std::string gsSrc;
 	gsSrc.append("#include <metal_stdlib>\r\n");
 	gsSrc.append("using namespace metal;\r\n");
@@ -86,7 +120,10 @@ static RendererShaderMtl* rectsEmulationGS_generate(MetalRenderer* metalRenderer
 	std::string vertexOutDefinition = "struct VertexOut {\r\n";
 	vertexOutDefinition += "float4 position;\r\n";
 	std::string geometryOutDefinition = "struct GeometryOut {\r\n";
-	geometryOutDefinition += "float4 position [[position]];\r\n";
+	geometryOutDefinition += computeVariant ? "float4 position;\r\n" : "float4 position [[position]];\r\n";
+	std::string geometryOutRasterDefinition = "struct GeometryOutRaster {\r\n";
+	geometryOutRasterDefinition += "float4 position [[position]];\r\n";
+	std::string gsToRasterBody = "r.position = o.position;\r\n";
 	auto parameterMask = vertexShader->outputParameterMask;
 	for (uint32 i = 0; i < 32; i++)
 	{
@@ -102,21 +139,52 @@ static RendererShaderMtl* rectsEmulationGS_generate(MetalRenderer* metalRenderer
 		// VertexOut
 		vertexOutDefinition += fmt::format("float4 passParameterSem{};\r\n", vsSemanticId);
 
-		// GeometryOut
+		// GeometryOut. On the emulated path this struct is ALSO the device-buffer element
+		// type, and MSL will not accept a struct carrying [[position]] or [[user(...)]] as
+		// one - so the attributes move to GeometryOutRaster below and this stays plain.
+		exportedParamCount++;
 		geometryOutDefinition += fmt::format("float4 passParameterSem{}", vsSemanticId);
-
-        geometryOutDefinition += fmt::format(" [[user(locn{})]]", psInputTable.getPSImportLocationBySemanticId(vsSemanticId));
-        if (psImport->isFlat)
-            geometryOutDefinition += " [[flat]]";
-        if (psImport->isNoPerspective)
-			geometryOutDefinition += " [[center_no_perspective]]";
+		if (!computeVariant)
+		{
+            geometryOutDefinition += fmt::format(" [[user(locn{})]]", psInputTable.getPSImportLocationBySemanticId(vsSemanticId));
+            if (psImport->isFlat)
+                geometryOutDefinition += " [[flat]]";
+            if (psImport->isNoPerspective)
+    			geometryOutDefinition += " [[center_no_perspective]]";
+		}
         geometryOutDefinition += ";\r\n";
+
+		if (computeVariant)
+		{
+			geometryOutRasterDefinition += fmt::format("float4 passParameterSem{}", vsSemanticId);
+			geometryOutRasterDefinition += fmt::format(" [[user(locn{})]]", psInputTable.getPSImportLocationBySemanticId(vsSemanticId));
+			if (psImport->isFlat)
+				geometryOutRasterDefinition += " [[flat]]";
+			if (psImport->isNoPerspective)
+				geometryOutRasterDefinition += " [[center_no_perspective]]";
+			geometryOutRasterDefinition += ";\r\n";
+			gsToRasterBody += fmt::format("r.passParameterSem{} = o.passParameterSem{};\r\n", vsSemanticId, vsSemanticId);
+		}
 	}
 	vertexOutDefinition += "};\r\n";
 	geometryOutDefinition += "};\r\n";
+	geometryOutRasterDefinition += "};\r\n";
 
 	gsSrc.append(vertexOutDefinition);
 	gsSrc.append(geometryOutDefinition);
+	if (computeVariant)
+	{
+		gsSrc.append(geometryOutRasterDefinition);
+		gsSrc.append("static GeometryOutRaster gsToRaster(GeometryOut o) {\r\n");
+		gsSrc.append("GeometryOutRaster r;\r\n");
+		gsSrc.append(gsToRasterBody);
+		gsSrc.append("return r;\r\n");
+		gsSrc.append("}\r\n");
+		// float4 members force 16-byte alignment, so position plus each parameter is a
+		// flat 16 bytes and the total is already a multiple of it.
+		if (outVertexStride)
+			*outVertexStride = 16u + exportedParamCount * 16u;
+	}
 
 	gsSrc.append("struct ObjectPayload {\r\n");
 	gsSrc.append("VertexOut vertexOut[3];\r\n");
@@ -139,11 +207,26 @@ static RendererShaderMtl* rectsEmulationGS_generate(MetalRenderer* metalRenderer
 	gsSrc.append("}\r\n");
 
 	// main
-	gsSrc.append("using MeshType = mesh<GeometryOut, void, 4, 2, topology::triangle>;\r\n");
-	gsSrc.append("[[mesh, max_total_threads_per_threadgroup(1)]]\r\n");
-	gsSrc.append("void main0(MeshType mesh, const object_data ObjectPayload& objectPayload [[payload]])\r\n");
-	gsSrc.append("{\r\n");
-	gsSrc.append("GeometryOut out;\r\n");
+	if (computeVariant)
+	{
+		// One thread per rectangle. Buffer indices are fixed rather than decompiler-assigned
+		// because this entry point is generated here and has its own binding namespace; the
+		// draw path binds to the same two numbers.
+		gsSrc.append("kernel void main0(const device ObjectPayload* gsPayloadIn [[buffer(0)]], device GeometryOut* gsOut [[buffer(1)]], uint gid [[thread_position_in_grid]])\r\n");
+		gsSrc.append("{\r\n");
+		gsSrc.append("const device ObjectPayload& objectPayload = gsPayloadIn[gid];\r\n");
+		gsSrc.append("device GeometryOut* dst = gsOut + gid * 6;\r\n");
+		gsSrc.append("GeometryOut out;\r\n");
+		gsSrc.append("GeometryOut verts[4];\r\n");
+	}
+	else
+	{
+    	gsSrc.append("using MeshType = mesh<GeometryOut, void, 4, 2, topology::triangle>;\r\n");
+    	gsSrc.append("[[mesh, max_total_threads_per_threadgroup(1)]]\r\n");
+    	gsSrc.append("void main0(MeshType mesh, const object_data ObjectPayload& objectPayload [[payload]])\r\n");
+    	gsSrc.append("{\r\n");
+    	gsSrc.append("GeometryOut out;\r\n");
+	}
 
 	// there are two possible winding orders that need different triangle generation:
 	// 0 1
@@ -163,18 +246,33 @@ static RendererShaderMtl* rectsEmulationGS_generate(MetalRenderer* metalRenderer
 	gsSrc.append("if(dist0_1 > dist0_2 && dist0_1 > dist1_2)\r\n");
 	gsSrc.append("{\r\n");
 	// p0 to p1 is diagonal
-	rectsEmulationGS_outputVerticesCode(gsSrc, vertexShader, psInputTable, 2, 1, 0, 3, "A", latteRegister);
+	rectsEmulationGS_outputVerticesCode(gsSrc, vertexShader, psInputTable, 2, 1, 0, 3, "A", latteRegister, computeVariant);
 	gsSrc.append("} else if ( dist0_2 > dist0_1 && dist0_2 > dist1_2 ) {\r\n");
 	// p0 to p2 is diagonal
-	rectsEmulationGS_outputVerticesCode(gsSrc, vertexShader, psInputTable, 1, 2, 0, 3, "B", latteRegister);
+	rectsEmulationGS_outputVerticesCode(gsSrc, vertexShader, psInputTable, 1, 2, 0, 3, "B", latteRegister, computeVariant);
 	gsSrc.append("} else {\r\n");
 	// p1 to p2 is diagonal
-	rectsEmulationGS_outputVerticesCode(gsSrc, vertexShader, psInputTable, 0, 1, 2, 3, "C", latteRegister);
+	rectsEmulationGS_outputVerticesCode(gsSrc, vertexShader, psInputTable, 0, 1, 2, 3, "C", latteRegister, computeVariant);
 	gsSrc.append("}\r\n");
 
-	gsSrc.append("mesh.set_primitive_count(2);\r\n");
+	if (!computeVariant)
+		gsSrc.append("mesh.set_primitive_count(2);\r\n");
 
 	gsSrc.append("}\r\n");
+
+	if (computeVariant)
+	{
+		// Ships in the same library as the kernel above because it has to agree with that
+		// shader's own GeometryOut layout. RendererShaderMtl looks this entry point up by
+		// name after compiling, so no extra plumbing is needed to reach it.
+		// Every slot is written - a rectangle always produces exactly two triangles - so
+		// unlike the general geometry-shader case there is no primitive count to consult
+		// and nothing to clip away.
+		gsSrc.append("vertex GeometryOutRaster gsPassthroughVS(const device GeometryOut* gsOut [[buffer(0)]], uint vid [[vertex_id]])\r\n");
+		gsSrc.append("{\r\n");
+		gsSrc.append("return gsToRaster(gsOut[vid]);\r\n");
+		gsSrc.append("}\r\n");
+	}
 
 	auto mtlShader = new RendererShaderMtl(metalRenderer, RendererShader::ShaderType::kGeometry, 0, 0, false, false, gsSrc);
 	mtlShader->PreponeCompilation(true);
@@ -302,7 +400,17 @@ void MetalPipelineCompiler::InitFromState(const LatteFetchShader* fetchShader, c
     if (geometryShader)
         m_geometryShaderMtl = static_cast<RendererShaderMtl*>(geometryShader->shader);
     else if (UseRectEmulation(lcr))
-        m_geometryShaderMtl = rectsEmulationGS_generate(m_mtlr, vertexShader, lcr);
+    {
+        // The draw path cannot reach this shader through geometryShader->shader, because a
+        // RECTS primitive has no LatteDecompilerShader at all. Hand it and its output
+        // stride to the pipeline object, which is the correct owner: the generated shader
+        // depends on the pixel shader's input table as well as the vertex shader, and the
+        // pipeline is keyed on both.
+        uint32 rectsVertexStride = 0;
+        m_geometryShaderMtl = rectsEmulationGS_generate(m_mtlr, vertexShader, lcr, &rectsVertexStride);
+        m_pipelineObj.m_rectsEmulationShader = m_geometryShaderMtl;
+        m_pipelineObj.m_rectsEmulationVertexStride = rectsVertexStride;
+    }
     else
         m_geometryShaderMtl = nullptr;
     m_pixelShaderMtl = static_cast<RendererShaderMtl*>(pixelShader->shader);

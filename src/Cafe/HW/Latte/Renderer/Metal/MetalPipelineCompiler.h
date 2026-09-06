@@ -8,6 +8,16 @@
 struct PipelineObject
 {
     MTL::RenderPipelineState* m_pipeline = nullptr;
+
+    // RECTS emulation only. A RECTS primitive has no LatteDecompilerShader of its own -
+    // its geometry stage is generated in code by rectsEmulationGS_generate - so the draw
+    // path cannot reach it through geometryShader->shader the way a real geometry shader
+    // is reached. It is carried here because the pipeline is the correct cache key: the
+    // generated shader depends on the PIXEL shader's input table as well as the vertex
+    // shader, so caching it per vertex shader would hand back the wrong one whenever the
+    // same vertex shader is paired with a different pixel shader.
+    class RendererShaderMtl* m_rectsEmulationShader = nullptr;
+    uint32 m_rectsEmulationVertexStride = 0;
 };
 
 class MetalPipelineCompiler
