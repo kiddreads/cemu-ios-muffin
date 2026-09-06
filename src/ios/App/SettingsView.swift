@@ -14,6 +14,7 @@ struct SettingsView: View {
     @ObservedObject var gameManager: GameManager
     @Environment(\.dismiss) private var dismiss
     @State private var showingIconPicker = false
+    @State private var showingThemePicker = false
     @State private var showingKeysImporter = false
     @State private var showingKeysRemovalConfirmation = false
     @State private var keyCount = WiiUKeys.installedKeyCount()
@@ -172,6 +173,15 @@ struct SettingsView: View {
                     Section("Appearance") {
                         Button(action: { showingIconPicker = true }) {
                             Label("App Icon", systemImage: "app.badge")
+                        }
+                        .foregroundColor(MuffinTheme.brownDarkest)
+
+                        // Deliberately its own row, not a sub-option under App Icon:
+                        // theme and icon are picked independently (see ThemePickerView's
+                        // header) - someone can love the Strawberry icon and the Galaxy
+                        // Space theme together.
+                        Button(action: { showingThemePicker = true }) {
+                            Label("Theme", systemImage: "paintpalette")
                         }
                         .foregroundColor(MuffinTheme.brownDarkest)
                     }
@@ -718,6 +728,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showingIconPicker) {
                 IconPickerView()
+            }
+            .sheet(isPresented: $showingThemePicker) {
+                ThemePickerView()
             }
             // .item for the same reason the ROM picker uses it: a keys.txt exported by
             // some other tool may carry no useful type at all, and a type filter would

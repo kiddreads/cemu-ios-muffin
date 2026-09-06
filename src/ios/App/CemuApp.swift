@@ -2,6 +2,16 @@ import SwiftUI
 
 @main
 struct CemuApp: App {
+    // MuffinTheme's tokens are plain static vars, not @Published properties any view's
+    // body reads through a property wrapper - the usual SwiftUI mechanism that makes a
+    // view redraw when its data changes doesn't apply to them. Observing the store
+    // once here and keying the whole tree to its current theme's id does the same job
+    // a different way: picking a new theme changes .id(), SwiftUI treats that as a new
+    // view identity, and the entire hierarchy underneath is torn down and rebuilt -
+    // reading every MuffinTheme.* call site fresh. A full rebuild is the right cost for
+    // "the user just changed the theme," not a concern the way it would be per-frame.
+    @ObservedObject private var themeStore = MuffinThemeStore.shared
+
     init() {
         // Earliest Swift-reachable point. If Documents/CemuCrashLog.txt never even
         // gets this line, the crash is happening before Swift's own App.init() runs -
@@ -14,6 +24,7 @@ struct CemuApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .id(themeStore.current.id)
                 .onAppear {
                     cemu_bridge_log_checkpoint("ContentView.onAppear reached")
                     #if os(iOS)

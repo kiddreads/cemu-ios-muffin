@@ -2,6 +2,30 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Root-caused via the unified log's TCC line, not the crash report itself (that one
+	     had no Application Specific Information at all - TCC's kill is a supervisory
+	     termination, not an app-thrown exception, so the reporter had nothing to unwind):
+	     "This app has crashed because it attempted to access privacy-sensitive data
+	     without a usage description." SDLControllerProvider's Bluetooth-controller scan
+	     hit this the instant a title launched, on both PlayCover/Mac and (since TCC is an
+	     OS-level requirement, not a PlayCover behavior) a real iPad. PlayCover's own
+	     entitlements template grants camera/microphone/bluetooth/addressbook/calendars/
+	     location, so any future code path touching those five kills the app exactly the
+	     same way the moment it runs - writing all six here now rather than one at a time
+	     as each gets discovered. Same literal-plist pattern as UIFileSharingEnabled below;
+	     not risking the flat INFOPLIST_KEY_* merge on a key this fatal to be wrong. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Muffin uses Bluetooth to connect wireless game controllers.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Muffin uses the camera for QR-code game/key import.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Muffin uses the microphone for in-game voice chat where a title supports it.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Muffin does not use contacts; this permission is not requested by any current feature.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Muffin does not use calendars; this permission is not requested by any current feature.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Muffin does not use location; this permission is not requested by any current feature.</string>
 	<!-- Moved here from project.yml's INFOPLIST_KEY_UIFileSharingEnabled: that flat
 	     build-setting merged correctly for LSSupportsOpeningDocumentsInPlace but
 	     silently dropped UIFileSharingEnabled from the actual shipped Info.plist
